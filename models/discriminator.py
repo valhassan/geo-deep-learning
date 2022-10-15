@@ -59,7 +59,7 @@ class Discriminator(nn.Module):
     The discriminator in the SRGAN, as defined in the paper.
     """
 
-    def __init__(self, in_channels=3, kernel_size=3, n_channels=64, n_blocks=8, fc_size=1024):
+    def __init__(self, in_channels=3, classes=1, kernel_size=3, n_channels=64, n_blocks=8, fc_size=1024, ):
         """
         :param kernel_size: kernel size in all convolutional blocks
         :param n_channels: number of output channels in the first convolutional block, after which it is doubled in every 2nd block thereafter
