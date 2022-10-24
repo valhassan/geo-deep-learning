@@ -1,7 +1,9 @@
 import os
 import h5py
+import rasterio
 import numpy as np
 from pathlib import Path
+from rasterio.plot import reshape_as_image
 from omegaconf import OmegaConf, DictConfig
 from torch.utils.data import Dataset
 
@@ -59,79 +61,85 @@ def create_files_and_datasets(samples_size: int, number_of_bands: int, samples_f
         hdf5_files.append(hdf5_file)
     return hdf5_files
 
-
 class SegmentationDataset(Dataset):
     """Semantic segmentation dataset based on HDF5 parsing."""
 
-    def __init__(self, work_folder,
+    def __init__(self,
+                 dataset_list_path,
                  dataset_type,
                  num_bands,
                  max_sample_count=None,
+                 dontcare=None,
                  radiom_transform=None,
                  geom_transform=None,
                  totensor_transform=None,
                  debug=False):
         # note: if 'max_sample_count' is None, then it will be read from the dataset at runtime
-        self.work_folder = work_folder
         self.max_sample_count = max_sample_count
         self.dataset_type = dataset_type
         self.num_bands = num_bands
-        self.metadata = []
         self.radiom_transform = radiom_transform
         self.geom_transform = geom_transform
         self.totensor_transform = totensor_transform
         self.debug = debug
-        self.hdf5_path = os.path.join(self.work_folder, self.dataset_type + "_samples.hdf5")
-        with h5py.File(self.hdf5_path, "r") as hdf5_file:
-            for i in range(hdf5_file["metadata"].shape[0]):
-                metadata = hdf5_file["metadata"][i, ...]
-                if isinstance(metadata, np.ndarray) and len(metadata) == 1:
-                    metadata = metadata[0]
-                    metadata = ordereddict_eval(metadata)
-                self.metadata.append(metadata)
-            if self.max_sample_count is None:
-                self.max_sample_count = hdf5_file["sat_img"].shape[0]
+        self.dontcare = dontcare
+        self.list_path = dataset_list_path
+        if not Path(self.list_path).is_file():
+            logging.error(f"Couldn't locate dataset list file: {self.list_path}.\n"
+                          f"If purposely omitting test set, this error can be ignored")
+            self.max_sample_count = 0
+        else:
+            with open(self.list_path, 'r') as datafile:
+                datalist = datafile.readlines()
+                if self.max_sample_count is None:
+                    self.max_sample_count = len(datalist)
 
     def __len__(self):
         return self.max_sample_count
 
     def __getitem__(self, index):
-        with h5py.File(self.hdf5_path, "r") as hdf5_file:
-            sat_img = np.float32(hdf5_file["sat_img"][index, ...])
+        with open(self.list_path, 'r') as datafile:
+            datalist = datafile.readlines()
+            data_line = datalist[index]
+            with rasterio.open(data_line.split(';')[0], 'r') as sat_handle:
+                sat_img = reshape_as_image(sat_handle.read())
+                metadata = sat_handle.meta
+            with rasterio.open(data_line.split(';')[1].rstrip('\n'), 'r') as label_handle:
+                map_img = reshape_as_image(label_handle.read())
+                map_img = map_img[..., 0]
+
             assert self.num_bands <= sat_img.shape[-1]
-            map_img = hdf5_file["map_img"][index, ...]
-            meta_idx = int(hdf5_file["meta_idx"][index])
-            metadata = self.metadata[meta_idx]
-            sample_metadata = hdf5_file["sample_metadata"][index, ...][0]
-            sample_metadata = eval(sample_metadata)
+
             if isinstance(metadata, np.ndarray) and len(metadata) == 1:
                 metadata = metadata[0]
             elif isinstance(metadata, bytes):
                 metadata = metadata.decode('UTF-8')
             try:
                 metadata = eval(metadata)
-                metadata.update(sample_metadata)
             except TypeError:
                 pass
 
-        sample = {"sat_img": sat_img, "map_img": map_img, "metadata": metadata,
-                  "hdf5_path": self.hdf5_path}
+        sample = {"sat_img": sat_img, "map_img": map_img, "metadata": metadata, "list_path": self.list_path}
 
         if self.radiom_transform:  # radiometric transforms should always precede geometric ones
             sample = self.radiom_transform(sample)
         if self.geom_transform:  # rotation, geometric scaling, flip and crop. Will also put channels first and convert to torch tensor from numpy.
             sample = self.geom_transform(sample)
-
         sample = self.totensor_transform(sample)
 
         if self.debug:
             # assert no new class values in map_img
             initial_class_ids = set(np.unique(map_img))
+            if self.dontcare is not None:
+                initial_class_ids.add(self.dontcare)
             final_class_ids = set(np.unique(sample['map_img'].numpy()))
             if not final_class_ids.issubset(initial_class_ids):
+                logging.debug(f"WARNING: Class ids for label before and after augmentations don't match. "
+                              f"Ignore if overwritting ignore_index in ToTensorTarget")
                 logging.warning(f"\nWARNING: Class values for label before and after augmentations don't match."
                                 f"\nUnique values before: {initial_class_ids}"
                                 f"\nUnique values after: {final_class_ids}"
                                 f"\nIgnore if some augmentations have padded with dontcare value.")
         sample['index'] = index
+
         return sample
