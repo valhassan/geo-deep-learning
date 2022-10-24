@@ -12,8 +12,16 @@ def create_metrics_dict(num_classes, ignore_index=None):
 
     num_classes = num_classes + 1 if num_classes == 1 else num_classes
 
-    metrics_dict = {'precision': AverageMeter(), 'recall': AverageMeter(), 'fscore': AverageMeter(),
-                    'loss': AverageMeter(), 'iou': AverageMeter()}
+    metrics_dict = {'precision': AverageMeter(),
+                    'recall': AverageMeter(),
+                    'fscore': AverageMeter(),
+                    'iou': AverageMeter(),
+                    'loss': AverageMeter(),
+                    'segmentor_loss': AverageMeter(),
+                    'discriminator_loss': AverageMeter(),
+                    'real_score_critic': AverageMeter(),
+                    'fake_score_critic': AverageMeter(),
+                    }
 
     for i in range(0, num_classes):
         if ignore_index != i:
