@@ -25,6 +25,18 @@ def make_dataset_file_name(exp_name: str, min_annot: int, dataset: str, attr_val
     dataset_file_name = f'{exp_name}{sampling_str}_{dataset}.csv'
     return dataset_file_name, sampling_str
 
+def flatten_labels(annotations):
+    """Flatten labels"""
+    flatten = annotations.view(-1)
+    return flatten
+
+def flatten_outputs(predictions, number_of_classes):
+    """Flatten the prediction batch except the prediction dimensions"""
+    logits_permuted = predictions.permute(0, 2, 3, 1)
+    logits_permuted_cont = logits_permuted.contiguous()
+    outputs_flatten = logits_permuted_cont.view(-1, number_of_classes)
+    return outputs_flatten
+
 def get_num_samples(samples_path, params, min_annot_perc, attr_vals, experiment_name:str):
     """
     Function to retrieve number of samples, either from config file or directly from hdf5 file.

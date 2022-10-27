@@ -1,16 +1,21 @@
 import torch
+import shutil
 from tqdm import tqdm
 from torch import optim
 from pathlib import Path
 from typing import Sequence
+from datetime import datetime
 from omegaconf import DictConfig
+from collections import OrderedDict
 from utils.loss import define_loss
-from utils.logger import get_logger
+from utils.logger import get_logger, InformationLogger, set_tracker
 from models.model_choice import define_model
 from utils.metrics import report_classification, create_metrics_dict, iou
-from utils.train_utils import create_dataloader, make_tiles_dir_name, make_dataset_file_name
+from utils.train_utils import create_dataloader, make_tiles_dir_name, \
+    make_dataset_file_name, flatten_outputs, flatten_labels
 from hydra.utils import to_absolute_path, instantiate
-from utils.utils import get_key_def, get_device_ids, set_device
+from utils.utils import get_key_def, get_device_ids, set_device, gpu_stats
+from utils.visualization import vis_from_batch
 # Set the logging file
 logging = get_logger(__name__)  # import logging
 
@@ -94,6 +99,84 @@ def training(train_loader,
     return train_metrics
 
 
+def evaluation(eval_loader,
+               segmentor,
+               criterion,
+               num_classes,
+               batch_size,
+               vis_params,
+               output_path,
+               ep_idx,
+               scale,
+               batch_metrics=None,
+               device=None,
+               dataset='val',
+               debug=False,
+               dontcare=-1,
+               ):
+    segmentor.eval()
+    eval_metrics = create_metrics_dict(num_classes=num_classes)
+
+    with torch.no_grad():
+        for batch_index, data in enumerate(tqdm(eval_loader, dynamic_ncols=True, desc=f'Iterating {dataset} '
+                                                                                      f'batches with {device.type}')):
+            inputs = data['sat_img'].to(device)
+            labels = data['map_img'].to(device)
+            labels_ = labels.unsqueeze(1).float()
+
+            outputs = segmentor(inputs)
+
+            # vis_batch_range: range of batches to perform visualization on.
+            # vis_at_eval: (bool) if True, will perform visualization at eval time.
+            if vis_params['vis_batch_range'] and vis_params['vis_at_eval']:
+                min_vis_batch, max_vis_batch, increment = vis_params['vis_batch_range']
+                if batch_index in range(min_vis_batch, max_vis_batch, increment):
+                    vis_path = output_path.parent.joinpath('visualization')
+                    if ep_idx == 0 and batch_index == min_vis_batch:
+                        logging.info(f'\nVisualizing on {dataset} outputs for batches in range '
+                                     f'{vis_params["vis_batch_range"]} images will be saved to {vis_path}\n')
+                    vis_from_batch(vis_params, inputs, outputs,
+                                   batch_index=batch_index,
+                                   vis_path=vis_path,
+                                   labels=labels,
+                                   dataset=dataset,
+                                   ep_num=ep_idx + 1,
+                                   scale=scale)
+            outputs_flatten = flatten_outputs(outputs, num_classes)
+            labels_flatten = flatten_labels(labels)
+            loss = criterion(outputs, labels_)
+            eval_metrics['loss'].update(loss.item(), batch_size)
+            if (dataset == 'val') and (batch_metrics is not None):
+                # Compute metrics every n batches. Time consuming.
+                if not batch_metrics <= len(eval_loader):
+                    logging.error(f"\nBatch_metrics ({batch_metrics}) is smaller than batch size "
+                                  f"{len(eval_loader)}. Metrics in validation loop won't be computed")
+                if (batch_index + 1) % batch_metrics == 0:  # +1 to skip val loop at very beginning
+                    a, segmentation = torch.max(outputs_flatten, dim=1)
+                    eval_metrics = iou(segmentation, labels_flatten, batch_size, num_classes, eval_metrics, dontcare)
+                    eval_metrics = report_classification(segmentation, labels_flatten, batch_size, eval_metrics,
+                                                         ignore_index=dontcare)
+            elif dataset == 'tst':
+                a, segmentation = torch.max(outputs_flatten, dim=1)
+                eval_metrics = iou(segmentation, labels_flatten, batch_size, num_classes, eval_metrics, dontcare)
+                eval_metrics = report_classification(segmentation, labels_flatten, batch_size, eval_metrics,
+                                                     ignore_index=dontcare)
+            logging.debug(OrderedDict(dataset=dataset, loss=f'{eval_metrics["loss"].avg:.4f}'))
+            if debug and device.type == 'cuda':
+                res, mem = gpu_stats(device=device.index)
+                logging.debug(OrderedDict(
+                    device=device, gpu_perc=f"{res['gpu']} %",
+                    gpu_RAM=f"{mem['used'] / (1024 ** 2):.0f}/{mem['total'] / (1024 ** 2):.0f} MiB"))
+        if eval_metrics['loss'].avg:
+            logging.info(f"\n{dataset} Loss: {eval_metrics['loss'].avg:.4f}")
+        if batch_metrics is not None or dataset == 'tst':
+            logging.info(f"\n{dataset} precision: {eval_metrics['precision'].avg:.4f}")
+            logging.info(f"\n{dataset} recall: {eval_metrics['recall'].avg:.4f}")
+            logging.info(f"\n{dataset} fscore: {eval_metrics['fscore'].avg:.4f}")
+            logging.info(f"\n{dataset} iou: {eval_metrics['iou'].avg:.4f}")
+    return eval_metrics
+
+
 def train(cfg: DictConfig) -> None:
 
     # MANDATORY PARAMETERS
@@ -107,17 +190,19 @@ def train(cfg: DictConfig) -> None:
 
     # OPTIONAL PARAMETERS
     debug = get_key_def('debug', cfg)
+    if debug:
+        logging.warning(f'\nDebug mode activated')
     task = get_key_def('task', cfg['general'], default='segmentation')
     dontcare_val = get_key_def("ignore_index", cfg['dataset'], default=-1)
     scale = get_key_def('scale_data', cfg['augmentation'], default=[0, 1])
     batch_metrics = get_key_def('batch_metrics', cfg['training'], default=None)
     crop_size = get_key_def('crop_size', cfg['augmentation'], default=None)
-
     # overwrite dontcare values in label if loss doens't implement ignore_index
     dontcare2backgr = False if 'ignore_index' in cfg.loss.keys() else True
 
-
     # LOGGING PARAMETERS
+    run_name = get_key_def(['tracker', 'run_name'], cfg, default='gdl')
+    tracker_uri = get_key_def(['tracker', 'uri'], cfg, default=None, expected_type=str)
     experiment_name = get_key_def('project_name', cfg['general'], default='gdl-training')
 
     # PARAMETERS FOR DATA INPUTS
@@ -140,6 +225,41 @@ def train(cfg: DictConfig) -> None:
         raise FileNotFoundError(f'Could not locate data path {data_path}')
     tiles_dir_name = make_tiles_dir_name(samples_size, num_bands)
     tiles_dir = data_path / experiment_name / tiles_dir_name
+
+    # automatic model naming with unique id for each training
+    config_path = None
+    for list_path in cfg.general.config_path:
+        if list_path['provider'] == 'main':
+            config_path = list_path['path']
+    output_path = tiles_dir.joinpath('model') / run_name
+    if output_path.is_dir():
+        last_mod_time_suffix = datetime.fromtimestamp(output_path.stat().st_mtime).strftime('%Y%m%d-%H%M%S')
+        archive_output_path = output_path.parent / f"{output_path.stem}_{last_mod_time_suffix}"
+        shutil.move(output_path, archive_output_path)
+    output_path.mkdir(parents=True, exist_ok=False)
+    logging.info(f'\n Training artifacts will be saved to: {output_path}')
+
+    # VISUALIZATION PARAMETERS
+    colormap_file = get_key_def('colormap_file', cfg['visualization'], None)
+    heatmaps = get_key_def('heatmaps', cfg['visualization'], False)
+    heatmaps_inf = get_key_def('heatmaps', cfg['inference'], False)
+    grid = get_key_def('grid', cfg['visualization'], False)
+    mean = get_key_def('mean', cfg['augmentation']['normalization'])
+    std = get_key_def('std', cfg['augmentation']['normalization'])
+    vis_batch_range = get_key_def('vis_batch_range', cfg['visualization'], default=None)
+    vis_at_train = get_key_def('vis_at_train', cfg['visualization'], default=False)
+    vis_at_eval = get_key_def('vis_at_evaluation', cfg['visualization'], default=False)
+
+    vis_params = {'colormap_file': colormap_file, 'heatmaps': heatmaps, 'heatmaps_inf': heatmaps_inf, 'grid': grid,
+                  'mean': mean, 'std': std, 'vis_batch_range': vis_batch_range, 'vis_at_train': vis_at_train,
+                  'vis_at_eval': vis_at_eval, 'ignore_index': dontcare_val, 'inference_input_path': None}
+
+    # Save tracking
+    set_tracker(mode='train', type='mlflow', task='segmentation', experiment_name=experiment_name, run_name=run_name,
+                tracker_uri=tracker_uri, params=cfg,
+                keys2log=['general', 'training', 'dataset', 'model', 'optimizer', 'scheduler', 'augmentation'])
+    trn_log, val_log, tst_log = [InformationLogger(dataset) for dataset in ['trn', 'val', 'tst']]
+
 
     # MODEL PARAMETERS
     segmentor_ckpt_path = get_key_def('state_dict_path', cfg['training'], default=None, expected_type=str)
@@ -177,8 +297,7 @@ def train(cfg: DictConfig) -> None:
                                  state_dict_strict_load=state_dict_strict
                                  )
 
-
-
+    logging.info(f'\nCreating dataloaders from data in {tiles_dir}...')
     trn_dataloader, val_dataloader, tst_dataloader = create_dataloader(samples_folder=tiles_dir,
                                                                        batch_size=batch_size,
                                                                        eval_batch_size=eval_batch_size,
@@ -218,30 +337,28 @@ def train(cfg: DictConfig) -> None:
                               num_classes=num_classes,
                               batch_size=batch_size,
                               device=device)
-
-
-
-def evaluation(eval_loader,
-               segmentor,
-               num_classes,
-               device,
-               dataset='val',
-               ):
-    segmentor.eval()
-    eval_metrics = create_metrics_dict(num_classes=num_classes)
-
-    with torch.no_grad():
-        for batch_index, data in enumerate(tqdm(eval_loader, dynamic_ncols=True, desc=f'Iterating {dataset} '
-                                                                                      f'batches with {device.type}')):
-            inputs = data['sat_img'].to(device)
-            labels = data['map_img'].to(device).unsqueeze(1).float()
-            outputs = segmentor(inputs)
-
-
-
-
-
-
+        if 'trn_log' in locals():  # only save the value if a tracker is setup
+            trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou'])
+        val_report = evaluation(eval_loader=val_dataloader,
+                                segmentor=segmentor,
+                                criterion=criterion,
+                                num_classes=num_classes,
+                                batch_size=batch_size,
+                                vis_params=vis_params,
+                                output_path=output_path,
+                                ep_idx=epoch,
+                                scale=scale,
+                                batch_metrics=batch_metrics,
+                                device=device,
+                                dataset='val',
+                                debug=debug,
+                                dontcare=dontcare_val)
+        val_loss = val_report['loss'].avg
+        if 'val_log' in locals():  # only save the value if a tracker is setup
+            if batch_metrics is not None:
+                val_log.add_values(val_report, epoch)
+            else:
+                val_log.add_values(val_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou'])
 
 
 
