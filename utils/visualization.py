@@ -10,6 +10,8 @@ from PIL import Image
 from matplotlib import pyplot as plt, gridspec, cm, colors
 import csv
 
+from tqdm import tqdm
+from collections import OrderedDict
 from utils.utils import unscale, unnormalize, get_key_def
 from utils.geoutils import create_new_raster_from_base
 
@@ -93,6 +95,51 @@ def vis_from_batch(vis_params,
             scale=scale,
             debug=debug)
 
+def vis_from_dataloader(vis_params,
+                        eval_loader,
+                        model,
+                        ep_num,
+                        output_path,
+                        dataset='',
+                        scale=None,
+                        device=None,
+                        vis_batch_range=None):
+    """
+    Use a model and dataloader to provide outputs that can then be sent to vis_from_batch function to visualize performances of model, for example.
+    :param vis_params: (dict) Parameters found in the yaml config file useful for visualization
+    :param eval_loader: data loader
+    :param model: model to evaluate
+    :param ep_num: epoch index (for file naming purposes)
+    :param dataset: (str) 'val or 'tst'
+    :param device: device used by pytorch (cpu ou cuda)
+    :param vis_batch_range: (int) max number of samples to perform visualization on
+
+    :return:
+    """
+    vis_path = output_path.joinpath(f'visualization')
+    logging.info(f'Visualization figures will be saved to {vis_path}\n')
+    min_vis_batch, max_vis_batch, increment = vis_batch_range
+
+    model.eval()
+    with tqdm(eval_loader, dynamic_ncols=True) as _tqdm:
+        for batch_index, data in enumerate(_tqdm):
+            if vis_batch_range is not None and batch_index in range(min_vis_batch, max_vis_batch, increment):
+                with torch.no_grad():
+                    inputs = data['sat_img'].to(device)
+                    labels = data['map_img'].to(device)
+
+                    outputs = model(inputs)
+                    if isinstance(outputs, OrderedDict):
+                        outputs = outputs['out']
+
+                    vis_from_batch(vis_params, inputs, outputs,
+                                   batch_index=batch_index,
+                                   vis_path=vis_path,
+                                   labels=labels,
+                                   dataset=dataset,
+                                   ep_num=ep_num,
+                                   scale=scale)
+    logging.info(f'Saved visualization figures.\n')
 
 def vis(vis_params,
         input_,
