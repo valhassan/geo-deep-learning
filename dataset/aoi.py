@@ -1,6 +1,7 @@
 import functools
 import json
 from collections import OrderedDict
+from numbers import Number
 from pathlib import Path
 from typing import Union, Sequence, Dict, Tuple, List, Optional
 
@@ -9,6 +10,7 @@ import numpy as np
 import pyproj
 import pystac
 import rasterio
+from skimage import exposure
 from hydra.utils import to_absolute_path
 from pandas.io.common import is_url
 from pystac.extensions.eo import ItemEOExtension, Band
@@ -111,7 +113,7 @@ class AOI(object):
     """
 
     def __init__(self, raster: Union[Path, str],
-                 raster_bands_request: List = None,
+                 raster_bands_request: List = [],
                  label: Union[Path, str] = None,
                  split: str = None,
                  aoi_id: str = None,
@@ -123,7 +125,8 @@ class AOI(object):
                  root_dir: str = "data",
                  for_multiprocessing: bool = False,
                  raster_stats: bool = False,
-                 write_multiband: bool = False):
+                 write_multiband: bool = False,
+                 equalize_clahe_clip_limit: float = 0.):
         # TODO: dict printer to output report on list of aois
         """
         @param raster: pathlib.Path or str
@@ -154,7 +157,7 @@ class AOI(object):
         @param write_multiband: bool, optional
             If True, a multi-band raster side by side with single-bands rasters as provided in input csv. For debugging purposes.
         @param for_multiprocessing: bool, optional
-            If True, no rasterio.DatasetReader will be generated in __init__. User will have to call read raster later.
+            If True, no rasterio.DatasetReader will be generated in __init__. User will have to call open raster later.
             See: https://github.com/rasterio/rasterio/issues/1731
         """
         self.raster_multiband = None
@@ -209,17 +212,25 @@ class AOI(object):
         self.src_raster_to_dest_multiband(virtual=True)
         self.raster_open()
         self.raster_meta = self.raster.meta
-        self.raster_meta['name'] = self.raster.name
-        if self.raster_src_is_multiband:
-            self.raster_name = Path(self.raster.name)
-        else:
-            self.raster_name = Path(self.raster_raw_input[0]).name.replace("${dataset.bands}", "")
+        self.raster_name = self.name_raster(
+            input_path=self.raster_raw_input,
+            bands_list=self.raster_bands_request,
+            root_dir=self.root_dir,
+        )
 
         if raster_num_bands_expected:
             validate_num_bands(raster_path=self.raster, num_bands=raster_num_bands_expected)
 
         if self.raster_parsed and write_multiband:
             self.write_multiband_from_singleband_rasters_as_vrt()
+
+        if not isinstance(equalize_clahe_clip_limit, Number):
+            raise ValueError(f"Enhance clip limit should be a float. Got {type(equalize_clahe_clip_limit)}.")
+        self.enhance_clip_limit = equalize_clahe_clip_limit
+
+        if self.enhance_clip_limit > 0:
+            self.raster_multiband = self.equalize_hist_raster(clip_limit=self.enhance_clip_limit)
+            self.raster_open()
 
         # Check label data
         if label:
@@ -261,10 +272,8 @@ class AOI(object):
         # Check aoi_id string
         if aoi_id and not isinstance(aoi_id, str):
             raise TypeError(f'AOI name should be a string. Got {aoi_id} of type {type(aoi_id)}')
-        elif not aoi_id and self.raster_src_is_multiband:
-            aoi_id = Path(self.raster.name).stem  # Defaults to name of image without suffix
-        elif not aoi_id and not self.raster_src_is_multiband:
-            aoi_id = Path(self.raster_raw_input).stem  # Defaults to name of first singleband image without suffix
+        elif not aoi_id:
+            aoi_id = self.raster_name.stem  # Defaults to name of image without suffix
         self.aoi_id = aoi_id
 
         # Check collection string
@@ -323,7 +332,9 @@ class AOI(object):
                   attr_values_filter: list = None,
                   download_data: bool = False,
                   root_dir: str = "data",
-                  for_multiprocessing: bool = False):
+                  for_multiprocessing: bool = False,
+                  equalize_clahe_clip_limit: float = 0.,
+                  ):
         """Instanciates an AOI object from an input-data dictionary as expected by geo-deep-learning"""
         if not isinstance(aoi_dict, dict):
             raise TypeError('Input data should be a dictionary.')
@@ -347,6 +358,7 @@ class AOI(object):
             download_data=download_data,
             root_dir=root_dir,
             for_multiprocessing=for_multiprocessing,
+            equalize_clahe_clip_limit=equalize_clahe_clip_limit,
         )
         return new_aoi
 
@@ -480,27 +492,57 @@ class AOI(object):
         out_dir = self.root_dir
 
         if out_dir is None:
-            logging.error(f"There is no path for the output, root_dir shoudn't be None")
+            logging.error(f"There is no path for the output, root_dir shouldn't be None")
             return
         if not self.raster.driver == 'VRT':
             logging.error(f"To write a multi-band raster from single-band files, a VRT must be provided."
                           f"\nGot {self.raster.meta}")
             return
-        if "${dataset.bands}" in self.raster_raw_input:
-            out_tif_path = out_dir / Path(self.raster_raw_input).name.replace("${dataset.bands}", ''.join(self.raster_bands_request))
-        elif is_stac_item(self.raster_raw_input):
-            out_tif_path = out_dir / f"{Path(self.raster_raw_input).stem}_{'-'.join(self.raster_bands_request)}.tif"
-        else:
-            logging.error(f"\nTo write multiband raster from single band imagery, "
-                          f"source imagery must be referenced with expected formats.\n"
-                          f"See dataset/README.md")
-            return
-        logging.debug(f"Writing multi-band raster to {out_tif_path}")
+        logging.debug(f"Writing multi-band raster to {self.raster_name}")
         create_new_raster_from_base(
             input_raster=self.raster,
-            output_raster=str(out_tif_path),
+            output_raster=self.raster_name,
             write_array=self.raster.read())
-        return out_tif_path
+        return self.raster_name
+
+    def equalize_hist_raster(self, clip_limit: float = 0.):
+        """
+        Applies clahe equalization on the input raster, then saved a copy of result to disk.
+        Note: reading and equalizing large images requires lots of RAM and may cause out-of-memory errors
+        Reference: https://github.com/NRCan/geo-deep-learning/issues/359#issuecomment-1290974856
+        @return:
+        """
+        if clip_limit == 1:
+            return self.raster_name
+        clip_lim_str = str(clip_limit).replace('.', '')
+        self.raster_name_clahe = self.raster_name.parent / f"{self.raster_name.stem}_clahe{clip_lim_str}.tif"
+        self.raster_name_clahe = to_absolute_path(str(self.raster_name_clahe))
+        if self.raster_np is None:
+            self.raster_np = self.raster.read()
+        img_adapteq = []
+        for band in range(self.raster_np.shape[0]):
+            if self.raster_np.shape[1] > 30000 and self.raster_np.shape[2] > 20000:
+                new_img = np.zeros((self.raster_np.shape[1], self.raster_np.shape[2]), dtype=np.uint8)
+                step_h = int(np.ceil(self.raster_np.shape[1] / 4))
+                step_w = int(np.ceil(self.raster_np.shape[2] / 4))
+                for row in range(0, self.raster_np.shape[1], step_h):
+                    for col in range(0, self.raster_np.shape[2], step_w):
+                        sub_out = self.raster_np[band, row:row + step_h, col:col + step_w]
+                        sub_out = exposure.equalize_adapthist(sub_out, clip_limit=clip_limit)
+                        sub_out = exposure.rescale_intensity(sub_out, out_range=(0, 255)).astype(np.uint8)
+                        new_img[row:row + step_h, col:col + step_w] = sub_out
+            else:
+                new_img = exposure.equalize_adapthist(self.raster_np[band, :, :], clip_limit=0.1)
+                new_img = exposure.rescale_intensity(new_img, out_range=(0, 255)).astype(np.uint8)
+            img_adapteq.append(new_img)
+        self.raster_np = np.stack(img_adapteq, axis=0)
+        create_new_raster_from_base(self.raster, self.raster_name_clahe, self.raster_np)
+        return self.raster_name_clahe
+
+    def close_raster(self) -> None:
+        if self.raster_closed is False:
+            self.raster.close()
+            self.raster_closed = True
 
     @staticmethod
     def parse_input_raster(
@@ -590,20 +632,42 @@ class AOI(object):
                              f'GeoDataFrame: {gdf_tile.info()}')
             raise e
 
-    def close_raster(self) -> None:
-        if self.raster_closed is False:
-            self.raster.close()
-            self.raster_closed = True
+    @staticmethod
+    def name_raster(input_path: Union[str, Path], bands_list: Sequence = [], root_dir: Union[str, Path] = "data"):
+        """
+        Assigns a name to the AOI's raster considering different input types
+        @param root_dir:
+            Root directory where derived raster would be written.
+            E.g. output from self.write_multiband_from_singleband_rasters_as_vrt()
+        @param input_path: path to input raster file as accepted by GDL (see dataset/README.md)
+        @param bands_list: list of requested bands from input raster
+        """
+        raster_name_parent = Path(root_dir)
+
+        bands_list_str = [str(band) for band in bands_list]
+        if len(bands_list_str) <= 4:
+            bands_suffix = f"{'-'.join(bands_list_str)}"
+        else:  # e.g. hyperspectral imagery
+            bands_suffix = f"{len(bands_list)}bands"
+
+        if "${dataset.bands}" in input_path:  # singleband with ${dataset.bands} pattern (implies band selection)
+            raster_name = raster_name_parent / f"{Path(input_path).stem.replace('${dataset.bands}', bands_suffix)}.tif"
+        elif len(bands_list_str) > 0:  # singleband from stac item or multiband with band selection
+            raster_name = raster_name_parent / f"{Path(input_path).stem}_{bands_suffix}.tif"
+        else:  # multiband, no band selection
+            raster_name = Path(input_path).parent / f"{Path(input_path).stem}.tif"
+        return raster_name
 
 
 def aois_from_csv(
         csv_path: Union[str, Path],
-        bands_requested: List = None,
+        bands_requested: List = [],
         attr_field_filter: str = None,
         attr_values_filter: str = None,
         download_data: bool = False,
         data_dir: str = "data",
         for_multiprocessing = False,
+        equalize_clahe_clip_limit: float = 0.,
 ):
     """
     Creates list of AOIs by parsing a csv file referencing input data
@@ -636,6 +700,7 @@ def aois_from_csv(
                 download_data=download_data,
                 root_dir=data_dir,
                 for_multiprocessing=for_multiprocessing,
+                equalize_clahe_clip_limit=equalize_clahe_clip_limit,
             )
             logging.debug(new_aoi)
             aois.append(new_aoi)
