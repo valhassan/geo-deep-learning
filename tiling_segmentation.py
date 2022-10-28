@@ -258,12 +258,14 @@ class Tiler(object):
 
     def tiling_checker(self,
                        src_img_meta: dict,
+                       src_img_name: str,
                        dest_img_tiles_dir: Union[str, Path],
                        dest_gt_tiles_dir: Union[str, Path] = None,
                        verbose: bool = True):
         """
         Checks how many tiles should be created and compares with number of tiles already written to output directory
         @param src_img_meta: path to source image
+        @param src_img_name: source image name
         @param dest_img_tiles_dir: optional, path to output directory where imagery tiles will be created
         @param dest_gt_tiles_dir: optional, path to output directory where ground truth tiles will be created
         @return: number of actual tiles in output directory, number of expected tiles
@@ -275,7 +277,7 @@ class Tiler(object):
         tiles_y = 1 + math.ceil((dest_height - self.dest_tile_size) / self.tile_stride)
         nb_exp_tiles = tiles_x * tiles_y
         # glob for tiles of the vector ground truth if 'geojson' is in the suffix
-        act_img_tiles = list(dest_img_tiles_dir.glob(f'{Path(src_img_meta["name"]).stem}*.tif'))
+        act_img_tiles = list(dest_img_tiles_dir.glob(f'{Path(src_img_name).stem}*.tif'))
         nb_act_img_tiles = len(act_img_tiles)
         nb_act_gt_tiles = 0
         if dest_gt_tiles_dir:
@@ -343,7 +345,7 @@ class Tiler(object):
             vec_tler.tile(src=aoi.label,
                           tile_bounds=raster_tiler.tile_bounds,
                           tile_bounds_crs=raster_bounds_crs,
-                          dest_fname_base=Path(aoi.raster_meta['name']).stem)
+                          dest_fname_base=Path(aoi.raster_name).stem)
             vec_tler_tile_paths = vec_tler.tile_paths
             vec_tler_tile_bds_reprojtd = vec_tler.tile_bds_reprojtd
 
@@ -585,6 +587,7 @@ def main(cfg: DictConfig) -> None:
     val_percent = int(get_key_def('train_val_percent', cfg['tiling'], default=0.3)['val'] * 100)
     attr_field = get_key_def('attribute_field', cfg['dataset'], None, expected_type=str)
     attr_vals = get_key_def('attribute_values', cfg['dataset'], None, expected_type=(Sequence, int))
+    clahe_clip_limit = get_key_def('clahe_clip_limit', cfg['tiling'], expected_type=float, default=0.)
 
     # ADD GIT HASH FROM CURRENT COMMIT TO PARAMETERS (if available and parameters will be saved to hdf5s).
     with open_dict(cfg):
@@ -620,6 +623,7 @@ def main(cfg: DictConfig) -> None:
         download_data=download_data,
         data_dir=data_dir,
         for_multiprocessing=parallel,
+        equalize_clahe_clip_limit=clahe_clip_limit,
     )
     tiler.with_gt_checker()
 
@@ -638,7 +642,8 @@ def main(cfg: DictConfig) -> None:
             tiles_dir_gt = tiles_dir / 'labels' if tiler.with_gt else None
 
             do_tile = True
-            data_pairs, nb_act_img_t, nb_act_gt_t, nb_exp_t = tiler.tiling_checker(aoi.raster_meta, tiles_dir_img, tiles_dir_gt)
+            data_pairs, nb_act_img_t, nb_act_gt_t, nb_exp_t = tiler.tiling_checker(aoi.raster_meta, aoi.raster_name,
+                                                                                   tiles_dir_img, tiles_dir_gt)
             # add info about found tiles for each aoi by aoi's index
             tiler.src_data_list[index].tiles_pairs_list = [(*data_pair, None) for data_pair in data_pairs]
             if nb_act_img_t == nb_exp_t == nb_act_gt_t or not tiler.with_gt and nb_act_img_t == nb_exp_t:
