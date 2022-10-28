@@ -1,3 +1,4 @@
+import time
 import torch
 import shutil
 from tqdm import tqdm
@@ -9,13 +10,13 @@ from omegaconf import DictConfig
 from collections import OrderedDict
 from utils.loss import define_loss
 from utils.logger import get_logger, InformationLogger, set_tracker
-from models.model_choice import define_model
+from models.model_choice import define_model, read_checkpoint, adapt_checkpoint_to_dp_model
 from utils.metrics import report_classification, create_metrics_dict, iou
 from utils.train_utils import create_dataloader, make_tiles_dir_name, \
     make_dataset_file_name, flatten_outputs, flatten_labels
 from hydra.utils import to_absolute_path, instantiate
 from utils.utils import get_key_def, get_device_ids, set_device, gpu_stats
-from utils.visualization import vis_from_batch
+from utils.visualization import vis_from_batch, vis_from_dataloader
 # Set the logging file
 logging = get_logger(__name__)  # import logging
 
@@ -92,10 +93,10 @@ def training(train_loader,
 
         d_scheduler.step()
         s_scheduler.step()
-        train_metrics['segmentor_loss'].update(loss_g.item(), batch_size)
-        train_metrics['discriminator_loss'].update(loss_d.item(), batch_size)
-        train_metrics['real_score_critic'].update(d_x, batch_size)
-        train_metrics['fake_score_critic'].update(d_g_z2, batch_size)
+        train_metrics['segmentor-loss'].update(loss_g.item(), batch_size)
+        train_metrics['discriminator-loss'].update(loss_d.item(), batch_size)
+        train_metrics['real-score-critic'].update(d_x, batch_size)
+        train_metrics['fake-score-critic'].update(d_g_z2, batch_size)
     return train_metrics
 
 
@@ -249,6 +250,9 @@ def train(cfg: DictConfig) -> None:
     vis_batch_range = get_key_def('vis_batch_range', cfg['visualization'], default=None)
     vis_at_train = get_key_def('vis_at_train', cfg['visualization'], default=False)
     vis_at_eval = get_key_def('vis_at_evaluation', cfg['visualization'], default=False)
+    vis_at_checkpoint = get_key_def('vis_at_checkpoint', cfg['visualization'], default=False)
+    ep_vis_min_thresh = get_key_def('vis_at_ckpt_min_ep_diff', cfg['visualization'], default=1)
+    vis_at_ckpt_dataset = get_key_def('vis_at_ckpt_dataset', cfg['visualization'], 'val')
 
     vis_params = {'colormap_file': colormap_file, 'heatmaps': heatmaps, 'heatmaps_inf': heatmaps_inf, 'grid': grid,
                   'mean': mean, 'std': std, 'vis_batch_range': vis_batch_range, 'vis_at_train': vis_at_train,
@@ -266,6 +270,8 @@ def train(cfg: DictConfig) -> None:
     discriminator_ckpt_path = get_key_def('discriminator_ckpt', cfg['training'], default=None, expected_type=str)
     state_dict_strict = get_key_def('state_dict_strict_load', cfg['training'], default=True, expected_type=bool)
     class_weights = get_key_def('class_weights', cfg['dataset'], default=None)
+    s_checkpoint_stack = [""]
+    d_checkpoint_stack = [""]
     if cfg.loss.is_binary and not num_classes == 1:
         raise ValueError(f"Parameter mismatch: a binary loss was chosen for a {num_classes}-class task")
     elif not cfg.loss.is_binary and num_classes == 1:
@@ -323,7 +329,9 @@ def train(cfg: DictConfig) -> None:
                                                 steps_per_epoch=steps_per_epoch, epochs=num_epochs)
     d_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_d, max_lr=0.01,
                                                 steps_per_epoch=steps_per_epoch, epochs=num_epochs)
-
+    since = time.time()
+    best_loss = 999
+    last_vis_epoch = 0
     for epoch in range(num_epochs):
         logging.info(f'\nEpoch {epoch}/{num_epochs - 1}\n' + "-" * len(f'Epoch {epoch}/{num_epochs - 1}'))
         trn_report = training(train_loader=trn_dataloader,
@@ -360,6 +368,75 @@ def train(cfg: DictConfig) -> None:
             else:
                 val_log.add_values(val_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou'])
 
+        if val_loss < best_loss:
+            logging.info("\nSave checkpoints with a validation loss of {:.4f}".format(val_loss))  # only allow 4 decimals
+            # create the checkpoint file
+            s_checkpoint_tag = s_checkpoint_stack.pop()
+            d_checkpoint_tag = d_checkpoint_stack.pop()
+            s_filename = output_path.joinpath(s_checkpoint_tag)
+            d_filename = output_path.joinpath(d_checkpoint_tag)
+            if s_filename.is_file():
+                s_filename.unlink()
+            if d_filename.is_file():
+                d_filename.unlink()
+            s_checkpoint_tag = f'S_{experiment_name}_{num_classes}_{"_".join(map(str, modalities))}_{val_loss:.2f}.pth.tar'
+            d_checkpoint_tag = f'D_{experiment_name}_{num_classes}_{"_".join(map(str, modalities))}_{val_loss:.2f}.pth.tar'
+            s_filename = output_path.joinpath(s_checkpoint_tag)
+            d_filename = output_path.joinpath(d_checkpoint_tag)
+            s_checkpoint_stack.append(s_checkpoint_tag)
+            d_checkpoint_stack.append(d_checkpoint_tag)
+            best_loss = val_loss
+            segmentor_state_dict = segmentor.module.state_dict() if num_devices > 1 else segmentor.state_dict()
+            discriminator_state_dict = discriminator.module.state_dict() if num_devices > 1 else discriminator.state_dict()
+            torch.save({'epoch': epoch,
+                        'params': cfg,
+                        'model_state_dict': segmentor_state_dict,
+                        'best_loss': best_loss,
+                        'optimizer_state_dict': optimizer_s.state_dict()}, s_filename)
+            torch.save({'epoch': epoch,
+                        'params': cfg,
+                        'model_state_dict': discriminator_state_dict,
+                        'best_loss': best_loss,
+                        'optimizer_state_dict': optimizer_d.state_dict()}, d_filename)
+
+            # VISUALIZATION: generate pngs of img samples, labels and outputs as alternative to follow training
+            if vis_batch_range is not None and vis_at_checkpoint and epoch - last_vis_epoch >= ep_vis_min_thresh:
+                if last_vis_epoch == 0:
+                    logging.info(f'\nVisualizing with {vis_at_ckpt_dataset} dataset samples on checkpointed model for'
+                                 f'batches in range {vis_batch_range}')
+                vis_from_dataloader(vis_params=vis_params,
+                                    eval_loader=val_dataloader if vis_at_ckpt_dataset == 'val' else tst_dataloader,
+                                    model=segmentor,
+                                    ep_num=epoch + 1,
+                                    output_path=output_path,
+                                    dataset=vis_at_ckpt_dataset,
+                                    scale=scale,
+                                    device=device,
+                                    vis_batch_range=vis_batch_range)
+                last_vis_epoch = epoch
+        cur_elapsed = time.time() - since
+    if int(cfg['general']['max_epochs']) > 0:   # if num_epochs is set to 0, model is loaded to evaluate on test set
+        s_checkpoint = read_checkpoint(s_filename)
+        s_checkpoint = adapt_checkpoint_to_dp_model(s_checkpoint, segmentor)
+        segmentor.load_state_dict(state_dict=s_checkpoint['model_state_dict'])
+
+    if tst_dataloader:
+        tst_report = evaluation(eval_loader=tst_dataloader,
+                                segmentor=segmentor,
+                                criterion=criterion,
+                                num_classes=num_classes,
+                                batch_size=batch_size,
+                                vis_params=vis_params,
+                                output_path=output_path,
+                                ep_idx=num_epochs,
+                                scale=scale,
+                                batch_metrics=batch_metrics,
+                                device=device,
+                                dataset='tst',
+                                debug=debug,
+                                dontcare=dontcare_val)
+        if 'tst_log' in locals():  # only save the value if a tracker is setup
+            tst_log.add_values(tst_report, num_epochs)
 
 
 def main(cfg: DictConfig) -> None:
