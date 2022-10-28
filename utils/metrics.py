@@ -17,10 +17,10 @@ def create_metrics_dict(num_classes, ignore_index=None):
                     'fscore': AverageMeter(),
                     'iou': AverageMeter(),
                     'loss': AverageMeter(),
-                    'segmentor_loss': AverageMeter(),
-                    'discriminator_loss': AverageMeter(),
-                    'real_score_critic': AverageMeter(),
-                    'fake_score_critic': AverageMeter(),
+                    'segmentor-loss': AverageMeter(),
+                    'discriminator-loss': AverageMeter(),
+                    'real-score-critic': AverageMeter(),
+                    'fake-score-critic': AverageMeter(),
                     }
 
     for i in range(0, num_classes):
