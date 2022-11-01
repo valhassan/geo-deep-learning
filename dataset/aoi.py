@@ -236,6 +236,7 @@ class AOI(object):
 
         # Check label data
         if label:
+            logging.info(f'image: {self.raster_multiband}, label: {label}')
             self.label = Path(label)
             self.label_gdf = _check_gdf_load(str(label))
             self.bounds_iou = self.bounds_iou_gdf_riodataset(
