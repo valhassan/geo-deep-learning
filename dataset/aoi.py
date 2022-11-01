@@ -15,6 +15,8 @@ from hydra.utils import to_absolute_path
 from pandas.io.common import is_url
 from pystac.extensions.eo import ItemEOExtension, Band
 from omegaconf import listconfig, ListConfig
+import shapely
+shapely.speedups.disable()
 from shapely.geometry import box, Polygon, MultiPolygon
 from solaris.utils.core import _check_rasterio_im_load, _check_gdf_load
 from torchvision.datasets.utils import download_url
