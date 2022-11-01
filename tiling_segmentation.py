@@ -571,7 +571,7 @@ def main(cfg: DictConfig) -> None:
     data_dir = get_key_def('raw_data_dir', cfg['dataset'], to_path=True, validate_path_exists=True)
     csv_file = get_key_def('raw_data_csv', cfg['dataset'], to_path=True, validate_path_exists=True)
     download_data = get_key_def('download_data', cfg['dataset'], default=False, expected_type=bool)
-    tiles_root_dir = get_key_def('tiles_data_dir', cfg['tiling'], default=data_dir, to_path=True,
+    tiles_root_dir = get_key_def('tiling_data_dir', cfg['tiling'], default=data_dir, to_path=True,
                                  validate_path_exists=True)
 
     # SAMPLE PARAMETERS
