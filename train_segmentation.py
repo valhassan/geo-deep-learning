@@ -1,9 +1,8 @@
 import shutil
 import time
-import h5py
 import torch
 import numpy as np
-from hydra.utils import to_absolute_path, instantiate
+from hydra.utils import instantiate
 from torch import optim
 from tqdm import tqdm
 from pathlib import Path
@@ -11,227 +10,15 @@ from datetime import datetime
 from typing import Sequence
 from collections import OrderedDict
 from omegaconf import DictConfig
-
-from torch.utils.data import DataLoader
-from sklearn.utils import compute_sample_weight
-from utils import augmentation as aug, create_dataset
 from utils.logger import InformationLogger, tsv_line, get_logger, set_tracker
 from utils.metrics import report_classification, create_metrics_dict, iou
+from utils.train_utils import create_dataloader, make_tiles_dir_name, flatten_outputs, flatten_labels
 from models.model_choice import read_checkpoint, define_model, adapt_checkpoint_to_dp_model
 from utils.loss import verify_weights, define_loss
 from utils.utils import gpu_stats, get_key_def, get_device_ids, set_device
-from utils.visualization import vis_from_batch
+from utils.visualization import vis_from_batch, vis_from_dataloader
 # Set the logging file
 logging = get_logger(__name__)  # import logging
-
-
-def flatten_labels(annotations):
-    """Flatten labels"""
-    flatten = annotations.view(-1)
-    return flatten
-
-
-def flatten_outputs(predictions, number_of_classes):
-    """Flatten the prediction batch except the prediction dimensions"""
-    logits_permuted = predictions.permute(0, 2, 3, 1)
-    logits_permuted_cont = logits_permuted.contiguous()
-    outputs_flatten = logits_permuted_cont.view(-1, number_of_classes)
-    return outputs_flatten
-
-
-def create_dataloader(samples_folder: Path,
-                      batch_size: int,
-                      eval_batch_size: int,
-                      gpu_devices_dict: dict,
-                      sample_size: int,
-                      dontcare_val: int,
-                      crop_size: int,
-                      num_bands: int,
-                      scale: Sequence,
-                      cfg: DictConfig,
-                      dontcare2backgr: bool = False,
-                      calc_eval_bs: bool = False,
-                      debug: bool = False):
-    """
-    Function to create dataloader objects for training, validation and test datasets.
-    :param samples_folder: path to folder containting .hdf5 files if task is segmentation
-    :param batch_size: (int) batch size
-    :param gpu_devices_dict: (dict) dictionary where each key contains an available GPU with its ram info stored as value
-    :param sample_size: (int) size of hdf5 samples (used to evaluate eval batch-size)
-    :param dontcare_val: (int) value in label to be ignored during loss calculation
-    :param num_bands: (int) number of bands in imagery
-    :param scale: (List) imagery data will be scaled to this min and max value (ex.: 0 to 1)
-    :param cfg: (dict) Parameters found in the yaml config file.
-    :param dontcare2backgr: (bool) if True, all dontcare values in label will be replaced with 0 (background value)
-                            before training
-    :return: trn_dataloader, val_dataloader, tst_dataloader
-    """
-    if not samples_folder.is_dir():
-        raise logging.critical(FileNotFoundError(f'\nCould not locate: {samples_folder}'))
-    if not len([f for f in samples_folder.glob('**/*.hdf5')]) >= 1:
-        raise logging.critical(FileNotFoundError(f"\nCouldn't locate .hdf5 files in {samples_folder}"))
-    num_samples, samples_weight = get_num_samples(samples_path=samples_folder, params=cfg)
-    if not num_samples['trn'] >= batch_size and num_samples['val'] >= batch_size:
-        raise logging.critical(ValueError(f"\nNumber of samples in .hdf5 files is less than batch size"))
-    logging.info(f"\nNumber of samples : {num_samples}")
-    dataset_constr = create_dataset.SegmentationDataset
-    datasets = []
-
-    for subset in ["trn", "val", "tst"]:
-        datasets.append(dataset_constr(samples_folder, subset, num_bands,
-                                       max_sample_count=num_samples[subset],
-                                       radiom_transform=aug.compose_transforms(params=cfg,
-                                                                               dataset=subset,
-                                                                               aug_type='radiometric'),
-                                       geom_transform=aug.compose_transforms(params=cfg,
-                                                                             dataset=subset,
-                                                                             aug_type='geometric',
-                                                                             dontcare=dontcare_val,
-                                                                             crop_size=crop_size),
-                                       totensor_transform=aug.compose_transforms(params=cfg,
-                                                                                 dataset=subset,
-                                                                                 scale=scale,
-                                                                                 dontcare2backgr=dontcare2backgr,
-                                                                                 dontcare=dontcare_val,
-                                                                                 aug_type='totensor'),
-                                       debug=debug))
-    trn_dataset, val_dataset, tst_dataset = datasets
-
-    # Number of workers
-    if cfg.training.num_workers:
-        num_workers = cfg.training.num_workers
-    else:  # https://discuss.pytorch.org/t/guidelines-for-assigning-num-workers-to-dataloader/813/5
-        num_workers = len(gpu_devices_dict.keys()) * 4 if len(gpu_devices_dict.keys()) > 1 else 4
-
-    samples_weight = torch.from_numpy(samples_weight)
-    sampler = torch.utils.data.sampler.WeightedRandomSampler(samples_weight.type('torch.DoubleTensor'),
-                                                             len(samples_weight))
-
-    if gpu_devices_dict and calc_eval_bs:
-        max_pix_per_mb_gpu = 280  # TODO: this value may need to be finetuned
-        eval_batch_size = calc_eval_batchsize(gpu_devices_dict, batch_size, sample_size, max_pix_per_mb_gpu)
-
-    trn_dataloader = DataLoader(trn_dataset, batch_size=batch_size, num_workers=num_workers, sampler=sampler,
-                                drop_last=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=eval_batch_size, num_workers=num_workers, shuffle=False,
-                                drop_last=True)
-    tst_dataloader = DataLoader(tst_dataset, batch_size=eval_batch_size, num_workers=num_workers, shuffle=False,
-                                drop_last=True) if num_samples['tst'] > 0 else None
-
-    if len(trn_dataloader) == 0 or len(val_dataloader) == 0:
-        raise ValueError(f"\nTrain and validation dataloader should contain at least one data item."
-                         f"\nTrain dataloader's length: {len(trn_dataloader)}"
-                         f"\nVal dataloader's length: {len(val_dataloader)}")
-
-    return trn_dataloader, val_dataloader, tst_dataloader
-
-
-def calc_eval_batchsize(gpu_devices_dict: dict, batch_size: int, sample_size: int, max_pix_per_mb_gpu: int = 280):
-    """
-    Calculate maximum batch size that could fit on GPU during evaluation based on thumb rule with harcoded
-    "pixels per MB of GPU RAM" as threshold. The batch size often needs to be smaller if crop is applied during training
-    @param gpu_devices_dict: dictionary containing info on GPU devices as returned by lst_device_ids (utils.py)
-    @param batch_size: batch size for training
-    @param sample_size: size of hdf5 samples
-    @return: returns a downgraded evaluation batch size if the original batch size is considered too high compared to
-    the GPU's memory
-    """
-    eval_batch_size_rd = batch_size
-    # get max ram for smallest gpu
-    smallest_gpu_ram = min(gpu_info['max_ram'] for _, gpu_info in gpu_devices_dict.items())
-    # rule of thumb to determine eval batch size based on approximate max pixels a gpu can handle during evaluation
-    pix_per_mb_gpu = (batch_size / len(gpu_devices_dict.keys()) * sample_size ** 2) / smallest_gpu_ram
-    if pix_per_mb_gpu >= max_pix_per_mb_gpu:
-        eval_batch_size = smallest_gpu_ram * max_pix_per_mb_gpu / sample_size ** 2
-        eval_batch_size_rd = int(eval_batch_size - eval_batch_size % len(gpu_devices_dict.keys()))
-        eval_batch_size_rd = 1 if eval_batch_size_rd < 1 else eval_batch_size_rd
-        logging.warning(f'Validation and test batch size downgraded from {batch_size} to {eval_batch_size} '
-                        f'based on max ram of smallest GPU available')
-    return eval_batch_size_rd
-
-
-def get_num_samples(samples_path, params):
-    """
-    Function to retrieve number of samples, either from config file or directly from hdf5 file.
-    :param samples_path: (str) Path to samples folder
-    :param params: (dict) Parameters found in the yaml config file.
-    :return: (dict) number of samples for trn, val and tst.
-    """
-    num_samples = {'trn': 0, 'val': 0, 'tst': 0}
-    weights = []
-    samples_weight = None
-    for i in ['trn', 'val', 'tst']:
-        logging.debug(f"Reading {samples_path}/{i}_samples.hdf5...")
-        if get_key_def(f"num_{i}_samples", params['training'], None) is not None:
-            num_samples[i] = get_key_def(f"num_{i}_samples", params['training'])
-            with h5py.File(samples_path.joinpath(f"{i}_samples.hdf5"), 'r') as hdf5_file:
-                file_num_samples = len(hdf5_file['map_img'])
-            if num_samples[i] > file_num_samples:
-                raise logging.critical(
-                    IndexError(f"\nThe number of training samples in the configuration file ({num_samples[i]}) "
-                               f"exceeds the number of samples in the hdf5 training dataset ({file_num_samples}).")
-                )
-        else:
-            with h5py.File(samples_path.joinpath(f"{i}_samples.hdf5"), "r") as hdf5_file:
-                num_samples[i] = len(hdf5_file['map_img'])
-
-        with h5py.File(samples_path.joinpath(f"{i}_samples.hdf5"), "r") as hdf5_file:
-            if i == 'trn':
-                for x in range(num_samples[i]):
-                    label = hdf5_file['map_img'][x]
-                    unique_labels = np.unique(label)
-                    weights.append(''.join([str(int(i)) for i in unique_labels]))
-                    samples_weight = compute_sample_weight('balanced', weights)
-
-    return num_samples, samples_weight
-
-
-def vis_from_dataloader(vis_params,
-                        eval_loader,
-                        model,
-                        ep_num,
-                        output_path,
-                        dataset='',
-                        scale=None,
-                        device=None,
-                        vis_batch_range=None):
-    """
-    Use a model and dataloader to provide outputs that can then be sent to vis_from_batch function to visualize performances of model, for example.
-    :param vis_params: (dict) Parameters found in the yaml config file useful for visualization
-    :param eval_loader: data loader
-    :param model: model to evaluate
-    :param ep_num: epoch index (for file naming purposes)
-    :param dataset: (str) 'val or 'tst'
-    :param device: device used by pytorch (cpu ou cuda)
-    :param vis_batch_range: (int) max number of samples to perform visualization on
-
-    :return:
-    """
-    vis_path = output_path.joinpath(f'visualization')
-    logging.info(f'Visualization figures will be saved to {vis_path}\n')
-    min_vis_batch, max_vis_batch, increment = vis_batch_range
-
-    model.eval()
-    with tqdm(eval_loader, dynamic_ncols=True) as _tqdm:
-        for batch_index, data in enumerate(_tqdm):
-            if vis_batch_range is not None and batch_index in range(min_vis_batch, max_vis_batch, increment):
-                with torch.no_grad():
-                    inputs = data['sat_img'].to(device)
-                    labels = data['map_img'].to(device)
-
-                    outputs = model(inputs)
-                    if isinstance(outputs, OrderedDict):
-                        outputs = outputs['out']
-
-                    vis_from_batch(vis_params, inputs, outputs,
-                                   batch_index=batch_index,
-                                   vis_path=vis_path,
-                                   labels=labels,
-                                   dataset=dataset,
-                                   ep_num=ep_num,
-                                   scale=scale)
-    logging.info(f'Saved visualization figures.\n')
-
 
 def training(train_loader,
           model,
@@ -516,20 +303,18 @@ def train(cfg: DictConfig) -> None:
     tracker_uri = get_key_def(['tracker', 'uri'], cfg, default=None, expected_type=str)
     experiment_name = get_key_def('project_name', cfg['general'], default='gdl-training')
 
-    # PARAMETERS FOR hdf5 SAMPLES
-    # info on the hdf5 name
+    # PARAMETERS FOR DATA INPUTS
     samples_size = get_key_def('chip_size', cfg['tiling'], default=256, expected_type=int)
+    attr_vals = get_key_def("attribute_values", cfg['dataset'], default=-1)
     overlap = get_key_def('overlap_size', cfg['tiling'], default=0)
     min_annot_perc = get_key_def('min_annot_perc', cfg['tiling'], default=0)
-    samples_folder_name = (
-        f'chips{samples_size}_overlap{overlap}_min-annot{min_annot_perc}_{num_bands}bands_{experiment_name}'
-    )
 
-    data_path = get_key_def('raw_data_dir', cfg['dataset'], to_path=True, validate_path_exists=True)
-    my_hdf5_path = get_key_def('tiling_data_dir', cfg['tiling'], default=data_path, to_path=True,
-                               validate_path_exists=True)
-    samples_folder = my_hdf5_path.joinpath(samples_folder_name).resolve(strict=True)
-    logging.info("\nThe HDF5 directory used '{}'".format(samples_folder))
+    # Tiles Directory
+    data_path = get_key_def('tiling_data_dir', cfg['tiling'], to_path=True, validate_path_exists=True)
+    if not data_path.is_dir():
+        raise FileNotFoundError(f'Could not locate data path {data_path}')
+    tiles_dir_name = make_tiles_dir_name(samples_size, num_bands)
+    tiles_dir = data_path / experiment_name / tiles_dir_name
 
     # visualization parameters
     vis_at_train = get_key_def('vis_at_train', cfg['visualization'], default=False)
@@ -553,14 +338,13 @@ def train(cfg: DictConfig) -> None:
     for list_path in cfg.general.config_path:
         if list_path['provider'] == 'main':
             config_path = list_path['path']
-    default_output_path = Path(to_absolute_path(f'{samples_folder}/model/{experiment_name}/{run_name}'))
-    output_path = get_key_def('save_weights_dir', cfg['general'], default=default_output_path, to_path=True)
+    output_path = tiles_dir.joinpath('model') / run_name
     if output_path.is_dir():
         last_mod_time_suffix = datetime.fromtimestamp(output_path.stat().st_mtime).strftime('%Y%m%d-%H%M%S')
         archive_output_path = output_path.parent / f"{output_path.stem}_{last_mod_time_suffix}"
         shutil.move(output_path, archive_output_path)
     output_path.mkdir(parents=True, exist_ok=False)
-    logging.info(f'\nModel will be saved to: {output_path}')
+    logging.info(f'\n Training artifacts will be saved to: {output_path}')
     if debug:
         logging.warning(f'\nDebug mode activated. Some debug features may mobilize extra disk space and '
                         f'cause delays in execution.')
@@ -596,8 +380,8 @@ def train(cfg: DictConfig) -> None:
     logging.info(f'\nInstantiated {cfg.model._target_} model with {num_bands} input channels and {num_classes} output '
                  f'classes.')
 
-    logging.info(f'\nCreating dataloaders from data in {samples_folder}...')
-    trn_dataloader, val_dataloader, tst_dataloader = create_dataloader(samples_folder=samples_folder,
+    logging.info(f'\nCreating dataloaders from data in {tiles_dir}...')
+    trn_dataloader, val_dataloader, tst_dataloader = create_dataloader(samples_folder=tiles_dir,
                                                                        batch_size=batch_size,
                                                                        eval_batch_size=eval_batch_size,
                                                                        gpu_devices_dict=gpu_devices_dict,
@@ -605,10 +389,11 @@ def train(cfg: DictConfig) -> None:
                                                                        dontcare_val=dontcare_val,
                                                                        crop_size=crop_size,
                                                                        num_bands=num_bands,
+                                                                       min_annot_perc=min_annot_perc,
+                                                                       attr_vals=attr_vals,
                                                                        scale=scale,
                                                                        cfg=cfg,
                                                                        dontcare2backgr=dontcare2backgr,
-                                                                       calc_eval_bs=calc_eval_bs,
                                                                        debug=debug)
 
     # Save tracking
