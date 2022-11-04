@@ -521,6 +521,8 @@ class AOI(object):
         clip_lim_str = str(clip_limit).replace('.', '')
         self.raster_name_clahe = self.raster_name.parent / f"{self.raster_name.stem}_clahe{clip_lim_str}.tif"
         self.raster_name_clahe = to_absolute_path(str(self.raster_name_clahe))
+        if Path(self.raster_name_clahe).is_file():
+            return self.raster_name_clahe
         if self.raster_np is None:
             self.raster_np = self.raster.read()
         img_adapteq = []
