@@ -106,9 +106,9 @@ def to_dp_model(model, devices: List):
     @return:
     """
     if not devices or len(devices) == 1:
+        logging.info(f"\nUsing data parallel on devices: {devices}. "
+                     f"Main device: 'cuda:{devices[0]}'")
         return model
-    logging.info(f"\nUsing data parallel on devices: {devices}. "
-                 f"Main device: 'cuda:{devices[0]}'")
     try:  # For HPC when device 0 not available. Error: Invalid device id (in torch/cuda/__init__.py).
         model = nn.DataParallel(model, device_ids=devices)
     except AssertionError:
@@ -136,7 +136,7 @@ def define_model(
         in_channels=in_channels,
         out_classes=out_classes,
     )
-    model = to_dp_model(model=model, devices=devices[1:]) if len(devices) > 1 else model
+    model = to_dp_model(model=model, devices=devices) if len(devices) > 1 else model
     model.to(main_device)
     if state_dict_path:
         checkpoint = read_checkpoint(state_dict_path)
