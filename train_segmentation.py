@@ -257,6 +257,7 @@ def train(cfg: DictConfig) -> None:
     batch_size = get_key_def('batch_size', cfg['training'], expected_type=int)
     eval_batch_size = get_key_def('eval_batch_size', cfg['training'], expected_type=int, default=batch_size)
     num_epochs = get_key_def('max_epochs', cfg['training'], expected_type=int)
+    early_stop_epoch = get_key_def('min_epochs', cfg['training'], expected_type=int, default=int(num_epochs * 0.5))
 
     # OPTIONAL PARAMETERS
     debug = get_key_def('debug', cfg)
@@ -404,6 +405,7 @@ def train(cfg: DictConfig) -> None:
 
     since = time.time()
     best_loss = 999
+    early_stop_count = 0
     last_vis_epoch = 0
 
     progress_log = output_path / 'progress.log'
@@ -485,6 +487,7 @@ def train(cfg: DictConfig) -> None:
             filename = output_path.joinpath(checkpoint_tag)
             checkpoint_stack.append(checkpoint_tag)
             best_loss = val_loss
+            early_stop_count = 0
             # More info:
             # https://pytorch.org/tutorials/beginner/saving_loading_models.html#saving-torch-nn-dataparallel-models
             state_dict = model.module.state_dict() if num_devices > 1 else model.state_dict()
@@ -509,9 +512,13 @@ def train(cfg: DictConfig) -> None:
                                     device=device,
                                     vis_batch_range=vis_batch_range)
                 last_vis_epoch = epoch
-
+        else:
+            early_stop_count += 1
         cur_elapsed = time.time() - since
         # logging.info(f'\nCurrent elapsed time {cur_elapsed // 60:.0f}m {cur_elapsed % 60:.0f}s')
+        if early_stop_count >= early_stop_epoch:
+            logging.info(f'Early stopping after patience elapsed!')
+            break
 
     # load checkpoint model and evaluate it on test dataset.
     if int(cfg['general']['max_epochs']) > 0:   # if num_epochs is set to 0, model is loaded to evaluate on test set

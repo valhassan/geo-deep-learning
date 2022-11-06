@@ -188,6 +188,7 @@ def train(cfg: DictConfig) -> None:
     batch_size = get_key_def('batch_size', cfg['training'], expected_type=int)
     eval_batch_size = get_key_def('eval_batch_size', cfg['training'], expected_type=int, default=batch_size)
     num_epochs = get_key_def('max_epochs', cfg['training'], expected_type=int)
+    early_stop_epoch = get_key_def('min_epochs', cfg['training'], expected_type=int, default=int(num_epochs * 0.5))
 
     # OPTIONAL PARAMETERS
     debug = get_key_def('debug', cfg)
@@ -331,6 +332,7 @@ def train(cfg: DictConfig) -> None:
                                                 steps_per_epoch=steps_per_epoch, epochs=num_epochs)
     since = time.time()
     best_loss = 999
+    early_stop_count = 0
     last_vis_epoch = 0
     for epoch in range(num_epochs):
         logging.info(f'\nEpoch {epoch}/{num_epochs - 1}\n' + "-" * len(f'Epoch {epoch}/{num_epochs - 1}'))
@@ -386,6 +388,7 @@ def train(cfg: DictConfig) -> None:
             s_checkpoint_stack.append(s_checkpoint_tag)
             d_checkpoint_stack.append(d_checkpoint_tag)
             best_loss = val_loss
+            early_stop_count = 0
             segmentor_state_dict = segmentor.module.state_dict() if num_devices > 1 else segmentor.state_dict()
             discriminator_state_dict = discriminator.module.state_dict() if num_devices > 1 else discriminator.state_dict()
             torch.save({'epoch': epoch,
@@ -414,7 +417,12 @@ def train(cfg: DictConfig) -> None:
                                     device=device,
                                     vis_batch_range=vis_batch_range)
                 last_vis_epoch = epoch
+        else:
+            early_stop_count += 1
         cur_elapsed = time.time() - since
+        if early_stop_count >= early_stop_epoch:
+            logging.info(f'Early stopping after patience elapsed!')
+            break
     if int(cfg['general']['max_epochs']) > 0:   # if num_epochs is set to 0, model is loaded to evaluate on test set
         s_checkpoint = read_checkpoint(s_filename)
         s_checkpoint = adapt_checkpoint_to_dp_model(s_checkpoint, segmentor)
