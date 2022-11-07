@@ -342,6 +342,8 @@ class Tiler(object):
                                                     dest_crs=dest_crs,
                                                     verbose=True,
                                                     super_verbose=self.debug)
+            logging.info(f'raster name: {aoi.raster_name}\n label name: {aoi.label}\n '
+                         f'raster_bounds: {raster_bounds_crs}\n dest_crs: {dest_crs}')
             vec_tler.tile(src=aoi.label,
                           tile_bounds=raster_tiler.tile_bounds,
                           tile_bounds_crs=raster_bounds_crs,
