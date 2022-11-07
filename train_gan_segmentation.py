@@ -291,17 +291,17 @@ def train(cfg: DictConfig) -> None:
         raise ValueError(f"Parameter mismatch: a multiclass loss was chosen for a 1-class (binary) task")
     del cfg.loss.is_binary  # prevent exception at instantiation
 
-    if segmentor_ckpt_path and not Path(segmentor_ckpt_path).is_file():
-        raise logging.critical(FileNotFoundError(f'\nCould not locate segmentor checkpoint for training: '
-                                                 f'{segmentor_ckpt_path}'))
+    warmup = True
+    if segmentor_ckpt_path:
+        if Path(segmentor_ckpt_path).is_file():
+            warmup = False
+        else:
+            raise logging.critical(FileNotFoundError(f'\nCould not locate segmentor checkpoint for training: '
+                                                     f'{segmentor_ckpt_path}'))
+
     if discriminator_ckpt_path and not Path(discriminator_ckpt_path).is_file():
         raise logging.critical(FileNotFoundError(f'\nCould not locate discriminator checkpoint for training: '
                                                  f'{discriminator_ckpt_path}'))
-    if Path(segmentor_ckpt_path).is_file() and Path(discriminator_ckpt_path).is_file():
-        warmup = False
-    else:
-        warmup = True
-
 
 
     segmentor = define_model(net_params=cfg.model,
