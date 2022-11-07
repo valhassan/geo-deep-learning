@@ -132,7 +132,7 @@ def evaluation(eval_loader,
             if vis_params['vis_batch_range'] and vis_params['vis_at_eval']:
                 min_vis_batch, max_vis_batch, increment = vis_params['vis_batch_range']
                 if batch_index in range(min_vis_batch, max_vis_batch, increment):
-                    vis_path = output_path.parent.joinpath('visualization')
+                    vis_path = output_path.joinpath('visualization')
                     if ep_idx == 0 and batch_index == min_vis_batch:
                         logging.info(f'\nVisualizing on {dataset} outputs for batches in range '
                                      f'{vis_params["vis_batch_range"]} images will be saved to {vis_path}\n')
