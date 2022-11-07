@@ -80,13 +80,12 @@ def training(train_loader,
         # Calculate G's losses
         loss_g1 = criterion(output_d, label_d)
         # Calculate gradients for G1
-        loss_g1.backward(retain_graph=True)
+        # loss_g1.backward(retain_graph=True)
         loss_g2 = criterion(fake_labels, real_labels)
         # Calculate gradients for G2
-        loss_g2.backward()
+        # loss_g2.backward()
         loss_g = loss_g1 + loss_g2
-        # print(lossG)
-        # lossG.backward()
+        loss_g.backward()
         d_g_z2 = output_d.mean().item()
         # Update G
         optimizer_s.step()
