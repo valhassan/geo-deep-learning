@@ -31,6 +31,7 @@ def training(train_loader,
              d_scheduler,
              num_classes,
              batch_size,
+             warm_up,
              device):
     train_metrics = create_metrics_dict(num_classes)
     # Establish convention for real and fake labels during training
@@ -38,15 +39,26 @@ def training(train_loader,
     label_is_fake = 0.0
     for batch_index, data in enumerate(tqdm(train_loader,
                                             desc=f'Iterating train batches with {device.type}')):
+        inputs = data['sat_img'].to(device)
+        real_labels = data['map_img'].to(device).unsqueeze(1).float()
+
+        if warm_up:
+            segmentor.zero_grad(set_to_none=True)
+            fake_labels = segmentor(inputs)
+            loss_g = criterion(fake_labels, real_labels)
+            loss_g.backward()
+            optimizer_s.step()
+            train_metrics['segmentor-loss'].update(loss_g.item(), batch_size)
+            return train_metrics
+
         ############################
         # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
         ###########################
         ## Train with real labels batch
-        discriminator.zero_grad(set_to_none=True)
-        inputs = data['sat_img'].to(device)
-        real_labels = data['map_img'].to(device).unsqueeze(1).float()
-        label_d = torch.full((batch_size,), label_is_real, dtype=torch.float).to(device)
+
         # Forward pass real batch through D
+        discriminator.zero_grad(set_to_none=True)
+        label_d = torch.full((batch_size,), label_is_real, dtype=torch.float).to(device)
         output_d = discriminator(real_labels).view(-1)
         # Calculate loss on all-real batch
         loss_d_real = criterion(output_d, label_d)
@@ -284,6 +296,11 @@ def train(cfg: DictConfig) -> None:
     if discriminator_ckpt_path and not Path(discriminator_ckpt_path).is_file():
         raise logging.critical(FileNotFoundError(f'\nCould not locate discriminator checkpoint for training: '
                                                  f'{discriminator_ckpt_path}'))
+    if Path(segmentor_ckpt_path).is_file() and Path(discriminator_ckpt_path).is_file():
+        warmup = False
+    else:
+        warmup = True
+
 
 
     segmentor = define_model(net_params=cfg.model,
@@ -333,6 +350,29 @@ def train(cfg: DictConfig) -> None:
     best_loss = 999
     early_stop_count = 0
     last_vis_epoch = 0
+
+    if warmup:
+        half_num_epochs = num_epochs // 2
+        if half_num_epochs > 10:
+            warmup_epochs = 10
+        else:
+            warmup_epochs = half_num_epochs
+        for epoch in range(warmup_epochs):
+            logging.info(f'\nWarmup Epoch {epoch}/{warmup_epochs - 1}\n'
+                         + "-" * len(f'Epoch {epoch}/{warmup_epochs - 1}'))
+            trn_report = training(train_loader=trn_dataloader,
+                                  discriminator=discriminator,
+                                  segmentor=segmentor,
+                                  criterion=criterion,
+                                  optimizer_s=optimizer_s,
+                                  optimizer_d=optimizer_d,
+                                  s_scheduler=s_scheduler,
+                                  d_scheduler=d_scheduler,
+                                  num_classes=num_classes,
+                                  batch_size=batch_size,
+                                  warm_up=warmup,
+                                  device=device)
+            logging.info(f'trn loss: {trn_report["segmentor-loss"].avg:.4f}')
     for epoch in range(num_epochs):
         logging.info(f'\nEpoch {epoch}/{num_epochs - 1}\n' + "-" * len(f'Epoch {epoch}/{num_epochs - 1}'))
         trn_report = training(train_loader=trn_dataloader,
@@ -345,9 +385,10 @@ def train(cfg: DictConfig) -> None:
                               d_scheduler=d_scheduler,
                               num_classes=num_classes,
                               batch_size=batch_size,
+                              warm_up=False,
                               device=device)
         if 'trn_log' in locals():  # only save the value if a tracker is setup
-            trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou'])
+            trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou', 'loss'])
         val_report = evaluation(eval_loader=val_dataloader,
                                 segmentor=segmentor,
                                 criterion=criterion,
@@ -367,7 +408,12 @@ def train(cfg: DictConfig) -> None:
             if batch_metrics is not None:
                 val_log.add_values(val_report, epoch)
             else:
-                val_log.add_values(val_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou'])
+                val_log.add_values(val_report, epoch, ignore=['precision', 'recall',
+                                                              'fscore', 'iou',
+                                                              'segmentor-loss',
+                                                              'discriminator-loss',
+                                                              'real-score-critic',
+                                                              'fake-score-critic'])
 
         if val_loss < best_loss:
             logging.info("\nSave checkpoints with a validation loss of {:.4f}".format(val_loss))  # only allow 4 decimals
@@ -443,8 +489,10 @@ def train(cfg: DictConfig) -> None:
                                 debug=debug,
                                 dontcare=dontcare_val)
         if 'tst_log' in locals():  # only save the value if a tracker is setup
-            tst_log.add_values(tst_report, num_epochs)
-
+            tst_log.add_values(tst_report, num_epochs, ignore=['segmentor-loss',
+                                                               'discriminator-loss',
+                                                               'real-score-critic',
+                                                               'fake-score-critic'])
 
 def main(cfg: DictConfig) -> None:
     """
