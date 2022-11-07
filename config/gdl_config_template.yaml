@@ -5,7 +5,7 @@ defaults:
   - tiling: default_tiling
   - training: default_training
   - loss: binary/softbce
-  - optimizer: adamw
+  - optimizer: adam
   - callbacks: default_callbacks
   - scheduler: plateau
   - dataset: test_ci_segmentation_binary

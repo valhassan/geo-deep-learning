@@ -35,7 +35,7 @@ def training(train_loader,
              device):
     train_metrics = create_metrics_dict(num_classes)
     # Establish convention for real and fake labels during training
-    label_is_real = 1.0
+    label_is_real = 0.9
     label_is_fake = 0.0
     for batch_index, data in enumerate(tqdm(train_loader,
                                             desc=f'Iterating train batches with {device.type}')):
@@ -108,6 +108,7 @@ def training(train_loader,
         train_metrics['discriminator-loss'].update(loss_d.item(), batch_size)
         train_metrics['real-score-critic'].update(d_x, batch_size)
         train_metrics['fake-score-critic'].update(d_g_z2, batch_size)
+    logging.info(f'trn Loss: {train_metrics["segmentor-loss"].avg:.4f}')
     return train_metrics
 
 
@@ -342,9 +343,9 @@ def train(cfg: DictConfig) -> None:
     criterion = criterion.to(device)
     optimizer_s = instantiate(cfg.optimizer, params=segmentor.parameters())
     optimizer_d = instantiate(cfg.optimizer, params=discriminator.parameters())
-    s_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_s, max_lr=0.01,
+    s_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_s, max_lr=0.1,
                                                 steps_per_epoch=steps_per_epoch, epochs=num_epochs)
-    d_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_d, max_lr=0.01,
+    d_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_d, max_lr=0.1,
                                                 steps_per_epoch=steps_per_epoch, epochs=num_epochs)
     since = time.time()
     best_loss = 999
