@@ -27,12 +27,12 @@ def training(train_loader,
              criterion,
              optimizer_s,
              optimizer_d,
-             s_scheduler,
-             d_scheduler,
              num_classes,
              batch_size,
              warm_up,
              device):
+    segmentor.train()
+    discriminator.train()
     train_metrics = create_metrics_dict(num_classes)
     # Establish convention for real and fake labels during training
     label_is_real = 0.9
@@ -101,9 +101,6 @@ def training(train_loader,
         d_g_z2 = output_d.mean().item()
         # Update G
         optimizer_s.step()
-
-        d_scheduler.step()
-        s_scheduler.step()
         train_metrics['segmentor-loss'].update(loss_g.item(), batch_size)
         train_metrics['discriminator-loss'].update(loss_d.item(), batch_size)
         train_metrics['real-score-critic'].update(d_x, batch_size)
@@ -336,17 +333,19 @@ def train(cfg: DictConfig) -> None:
                                                                        cfg=cfg,
                                                                        dontcare2backgr=dontcare2backgr,
                                                                        debug=debug)
-    steps_per_epoch = len(trn_dataloader)
-
-
+    # lr_steps_per_epoch = len(trn_dataloader)
+    lr_step_size = num_epochs // 4
     criterion = define_loss(loss_params=cfg.loss, class_weights=class_weights)
     criterion = criterion.to(device)
     optimizer_s = instantiate(cfg.optimizer, params=segmentor.parameters())
     optimizer_d = instantiate(cfg.optimizer, params=discriminator.parameters())
-    s_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_s, max_lr=0.1,
-                                                steps_per_epoch=steps_per_epoch, epochs=num_epochs)
-    d_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_d, max_lr=0.1,
-                                                steps_per_epoch=steps_per_epoch, epochs=num_epochs)
+    # s_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_s, max_lr=0.1,
+    #                                             steps_per_epoch=lr_steps_per_epoch, epochs=num_epochs)
+    # d_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_d, max_lr=0.1,
+    #                                             steps_per_epoch=lr_steps_per_epoch, epochs=num_epochs)
+    s_scheduler = optim.lr_scheduler.StepLR(optimizer_s, step_size=lr_step_size, gamma=0.1)
+    d_scheduler = optim.lr_scheduler.StepLR(optimizer_d, step_size=lr_step_size, gamma=0.1)
+
     since = time.time()
     best_loss = 999
     early_stop_count = 0
@@ -367,8 +366,6 @@ def train(cfg: DictConfig) -> None:
                                   criterion=criterion,
                                   optimizer_s=optimizer_s,
                                   optimizer_d=optimizer_d,
-                                  s_scheduler=s_scheduler,
-                                  d_scheduler=d_scheduler,
                                   num_classes=num_classes,
                                   batch_size=batch_size,
                                   warm_up=warmup,
@@ -382,14 +379,10 @@ def train(cfg: DictConfig) -> None:
                               criterion=criterion,
                               optimizer_s=optimizer_s,
                               optimizer_d=optimizer_d,
-                              s_scheduler=s_scheduler,
-                              d_scheduler=d_scheduler,
                               num_classes=num_classes,
                               batch_size=batch_size,
                               warm_up=False,
                               device=device)
-        if 'trn_log' in locals():  # only save the value if a tracker is setup
-            trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou', 'loss'])
         val_report = evaluation(eval_loader=val_dataloader,
                                 segmentor=segmentor,
                                 criterion=criterion,
@@ -404,7 +397,10 @@ def train(cfg: DictConfig) -> None:
                                 dataset='val',
                                 debug=debug,
                                 dontcare=dontcare_val)
-        val_loss = val_report['loss'].avg
+        d_scheduler.step()
+        s_scheduler.step()
+        if 'trn_log' in locals():  # only save the value if a tracker is setup
+            trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou', 'loss'])
         if 'val_log' in locals():  # only save the value if a tracker is setup
             if batch_metrics is not None:
                 val_log.add_values(val_report, epoch)
@@ -415,7 +411,7 @@ def train(cfg: DictConfig) -> None:
                                                               'discriminator-loss',
                                                               'real-score-critic',
                                                               'fake-score-critic'])
-
+        val_loss = val_report['loss'].avg
         if val_loss < best_loss:
             logging.info("\nSave checkpoints with a validation loss of {:.4f}".format(val_loss))  # only allow 4 decimals
             # create the checkpoint file
