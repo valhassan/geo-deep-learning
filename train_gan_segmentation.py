@@ -51,8 +51,8 @@ def training(train_loader,
             return train_metrics
 
         # create real and fake label
-        real_label = torch.full((batch_size, 1), label_is_real, dtype=images.dtype, device=device)
-        fake_label = torch.full((batch_size, 1), label_is_fake, dtype=images.dtype, device=device)
+        real_label = torch.full((batch_size,), label_is_real, dtype=images.dtype, device=device)
+        fake_label = torch.full((batch_size,), label_is_fake, dtype=images.dtype, device=device)
 
         # Train Discriminator
         for d_parameters in discriminator.parameters():
@@ -61,13 +61,13 @@ def training(train_loader,
         discriminator.zero_grad(set_to_none=True)
 
         # train discriminator on ground_truth (real labels)
-        gt_output = discriminator(ground_truth)
+        gt_output = discriminator(ground_truth).view(-1)
         loss_discriminator_gt = criterion(gt_output, real_label)
         loss_discriminator_gt.backward(retain_graph=True)
 
         # train discriminator on segmentor output (fake labels)
         segmentor_output = segmentor(images)
-        sg_output = discriminator(segmentor_output.detach().clone())
+        sg_output = discriminator(segmentor_output.detach().clone()).view(-1)
         loss_discriminator_sg = criterion(sg_output, fake_label)
         loss_discriminator_sg.backward()
 
@@ -82,7 +82,7 @@ def training(train_loader,
         segmentor.zero_grad(set_to_none=True)
 
         loss_segmentor_gt = criterion(segmentor_output, ground_truth)
-        loss_segmentor_sg = 0.001 * criterion(discriminator(segmentor_output), real_label)
+        loss_segmentor_sg = 0.001 * criterion(discriminator(segmentor_output).view(-1), real_label)
 
         # Total Segmentor loss
         loss_segmentor = loss_segmentor_gt + loss_segmentor_sg
