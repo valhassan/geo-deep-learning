@@ -39,72 +39,64 @@ def training(train_loader,
     label_is_fake = 0.0
     for batch_index, data in enumerate(tqdm(train_loader,
                                             desc=f'Iterating train batches with {device.type}')):
-        inputs = data['sat_img'].to(device)
-        real_labels = data['map_img'].to(device).unsqueeze(1).float()
-
+        images = data['sat_img'].to(device)
+        ground_truth = data['map_img'].to(device).unsqueeze(1).float()
         if warm_up:
             segmentor.zero_grad(set_to_none=True)
-            fake_labels = segmentor(inputs)
-            loss_g = criterion(fake_labels, real_labels)
-            loss_g.backward()
+            segmentor_output = segmentor(images)
+            loss_segmentor = criterion(segmentor_output, ground_truth)
+            loss_segmentor.backward()
             optimizer_s.step()
-            train_metrics['segmentor-loss'].update(loss_g.item(), batch_size)
+            train_metrics['segmentor-loss'].update(loss_segmentor.item(), batch_size)
             return train_metrics
 
-        ############################
-        # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
-        ###########################
-        ## Train with real labels batch
+        # create real and fake label
+        real_label = torch.full((batch_size, 1), label_is_real, dtype=images.dtype, device=device)
+        fake_label = torch.full((batch_size, 1), label_is_fake, dtype=images.dtype, device=device)
 
-        # Forward pass real batch through D
+        # Train Discriminator
+        for d_parameters in discriminator.parameters():
+            d_parameters.requires_grad = True
+
         discriminator.zero_grad(set_to_none=True)
-        label_d = torch.full((batch_size,), label_is_real, dtype=torch.float).to(device)
-        output_d = discriminator(real_labels).view(-1)
-        # Calculate loss on all-real batch
-        loss_d_real = criterion(output_d, label_d)
-        # Calculate gradients for D in backward pass
-        loss_d_real.backward()
-        d_x = output_d.mean().item()
-        ## Train with fake predicted batch
-        fake_labels = segmentor(inputs)
 
-        label_d.fill_(label_is_fake)
-        # Classify all fake batch with D
-        output_d = discriminator(fake_labels.detach()).view(-1)
-        # Calculate D's loss on the all-fake batch
-        loss_d_fake = criterion(output_d, label_d)
-        # Calculate the gradients for this batch,
-        # accumulated (summed) with previous gradients
-        loss_d_fake.backward()
-        d_g_z1 = output_d.mean().item()
-        # Compute error of D as sum over the fake and the real batches
-        loss_d = loss_d_real + loss_d_fake
-        # Update D
+        # train discriminator on ground_truth (real labels)
+        gt_output = discriminator(ground_truth)
+        loss_discriminator_gt = criterion(gt_output, real_label)
+        loss_discriminator_gt.backward(retain_graph=True)
+
+        # train discriminator on segmentor output (fake labels)
+        segmentor_output = segmentor(images)
+        sg_output = discriminator(segmentor_output.detach().clone())
+        loss_discriminator_sg = criterion(sg_output, fake_label)
+        loss_discriminator_sg.backward()
+
+        # Total Discriminator loss
+        loss_discriminator = loss_discriminator_gt + loss_discriminator_sg
         optimizer_d.step()
-        ############################
-        # (2) Update Segmentor network: maximize log(D(S(z)))
-        ###########################
-        segmentor.zero_grad(set_to_none=True)
-        label_d.fill_(label_is_real)  # fake labels are real for generator cost
-        # Since we just updated D, perform another forward pass of all-fake batch through D
-        output_d = discriminator(fake_labels).view(-1)
 
-        # Calculate G's losses
-        loss_g1 = criterion(output_d, label_d)
-        # Calculate gradients for G1
-        # loss_g1.backward(retain_graph=True)
-        loss_g2 = criterion(fake_labels, real_labels)
-        # Calculate gradients for G2
-        # loss_g2.backward()
-        loss_g = loss_g1 + loss_g2
-        loss_g.backward()
-        d_g_z2 = output_d.mean().item()
-        # Update G
+        # Train Generator
+        for d_parameters in discriminator.parameters():
+            d_parameters.requires_grad = False
+
+        segmentor.zero_grad(set_to_none=True)
+
+        loss_segmentor_gt = criterion(segmentor_output, ground_truth)
+        loss_segmentor_sg = 0.001 * criterion(discriminator(segmentor_output), real_label)
+
+        # Total Segmentor loss
+        loss_segmentor = loss_segmentor_gt + loss_segmentor_sg
+        loss_segmentor.backward()
         optimizer_s.step()
-        train_metrics['segmentor-loss'].update(loss_g.item(), batch_size)
-        train_metrics['discriminator-loss'].update(loss_d.item(), batch_size)
-        train_metrics['real-score-critic'].update(d_x, batch_size)
-        train_metrics['fake-score-critic'].update(d_g_z2, batch_size)
+
+        # Discriminator Output Probabilities (Real | Fake)
+        real_score = torch.sigmoid_(torch.mean(gt_output.detach()))
+        fake_score = torch.sigmoid_(torch.mean(sg_output.detach()))
+
+        train_metrics['real-score-critic'].update(real_score.item(), batch_size)
+        train_metrics['fake-score-critic'].update(fake_score.item(), batch_size)
+        train_metrics['segmentor-loss'].update(loss_segmentor.item(), batch_size)
+        train_metrics['discriminator-loss'].update(loss_discriminator.item(), batch_size)
     logging.info(f'trn Loss: {train_metrics["segmentor-loss"].avg:.4f}')
     return train_metrics
 
