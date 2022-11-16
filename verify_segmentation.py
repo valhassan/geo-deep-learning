@@ -103,12 +103,15 @@ def main(cfg: DictConfig) -> None:
     attribute_field = get_key_def('attribute_field', cfg['dataset'], None) #, expected_type=str)
     # Assert that all items in attribute_values are integers (ex.: single-class samples from multi-class label)
     attr_vals = get_key_def('attribute_values', cfg['dataset'], None, expected_type=(Sequence, int))
-
+    clahe_clip_limit = get_key_def('clahe_clip_limit', cfg['tiling'], expected_type=float, default=0.)
     output_report_dir = get_key_def('output_report_dir', cfg['verify'], to_path=True, validate_path_exists=True)
     output_raster_stats = get_key_def('output_raster_stats', cfg['verify'], default=False, expected_type=bool)
     output_raster_plots = get_key_def('output_raster_plots', cfg['verify'], default=False, expected_type=bool)
     extended_label_stats = get_key_def('extended_label_stats', cfg['verify'], default=False, expected_type=bool)
     parallel = get_key_def('multiprocessing', cfg['verify'], default=False, expected_type=bool)
+    aois_csv = output_report_dir / f"hpc_{csv_file.stem}.csv"
+    reports_csv = output_report_dir / f"report_info_{csv_file.stem}.csv"
+    errors_csv = output_report_dir / f"report_error_{csv_file.stem}.log"
 
     # ADD GIT HASH FROM CURRENT COMMIT TO PARAMETERS (if available and parameters will be saved to hdf5s).
     with open_dict(cfg):
@@ -123,31 +126,33 @@ def main(cfg: DictConfig) -> None:
         download_data=download_data,
         data_dir=data_dir,
         for_multiprocessing=parallel,
-    )
-
-    outpath_csv = output_report_dir / f"report_info_{csv_file.stem}.csv"
-    outpath_csv_errors = output_report_dir / f"report_error_{csv_file.stem}.log"
-
+        equalize_clahe_clip_limit=clahe_clip_limit,)
     # rename latest report if any
-    if outpath_csv.is_file():
-        last_mod_time_suffix = datetime.fromtimestamp(outpath_csv.stat().st_mtime).strftime('%Y%m%d-%H%M%S')
-        shutil.move(outpath_csv, outpath_csv.parent / f'{outpath_csv.stem}_{last_mod_time_suffix}.csv')
-    if outpath_csv_errors.is_file():
-        last_mod_time_suffix = datetime.fromtimestamp(outpath_csv_errors.stat().st_mtime).strftime('%Y%m%d-%H%M%S')
-        shutil.move(outpath_csv_errors, outpath_csv_errors.parent / f'{outpath_csv_errors.stem}_{last_mod_time_suffix}.csv')
+    if aois_csv.is_file():
+        last_mod_time_suffix = datetime.fromtimestamp(aois_csv.stat().st_mtime).strftime('%Y%m%d-%H%M%S')
+        shutil.move(aois_csv, aois_csv.parent / f'{aois_csv.stem}_{last_mod_time_suffix}.csv')
+    if reports_csv.is_file():
+        last_mod_time_suffix = datetime.fromtimestamp(reports_csv.stat().st_mtime).strftime('%Y%m%d-%H%M%S')
+        shutil.move(reports_csv, reports_csv.parent / f'{reports_csv.stem}_{last_mod_time_suffix}.csv')
+    if errors_csv.is_file():
+        last_mod_time_suffix = datetime.fromtimestamp(errors_csv.stat().st_mtime).strftime('%Y%m%d-%H%M%S')
+        shutil.move(errors_csv, errors_csv.parent / f'{errors_csv.stem}_{last_mod_time_suffix}.csv')
 
     input_args = []
     report_list = []
     errors = []
-    for aoi in tqdm(list_data_prep, position=0, desc="Verifying data"):
-        if parallel:
-            input_args.append([verify_per_aoi, aoi, output_report_dir, extended_label_stats,
-                               output_raster_stats, output_raster_plots])
-        else:
-            aoi_dict, error = verify_per_aoi(aoi, output_report_dir, extended_label_stats,
-                                             output_raster_stats, output_raster_plots)
-            report_list.append(aoi_dict)
-            errors.append(error)
+    with open(aois_csv, 'w', newline='') as output_file:
+        writer = csv.writer(output_file)
+        for aoi in tqdm(list_data_prep, position=0, desc="Verifying data"):
+            if parallel:
+                input_args.append([verify_per_aoi, aoi, output_report_dir, extended_label_stats,
+                                   output_raster_stats, output_raster_plots])
+            else:
+                aoi_dict, error = verify_per_aoi(aoi, output_report_dir, extended_label_stats,
+                                                 output_raster_stats, output_raster_plots)
+                report_list.append(aoi_dict)
+                errors.append(error)
+            writer.writerow([aoi.raster_multiband, aoi.label, aoi.split, aoi.aoi_id])
 
     if parallel:
         logging.info(f'Parallelizing verification of {len(input_args)} aois...')
@@ -156,8 +161,8 @@ def main(cfg: DictConfig) -> None:
         report_list.extend([aoi_dict for aoi_dict, _ in lines])
         errors.extend([error for _, error in lines])
 
-    logging.info(f"\nWriting to csv: {outpath_csv}...")
-    with open(outpath_csv, 'w', newline='') as output_file:
+    logging.info(f"\nWriting to csv: {reports_csv}...")
+    with open(reports_csv, 'w', newline='') as output_file:
         dict_writer = csv.DictWriter(output_file, report_list[0].keys(), delimiter=';')
         dict_writer.writeheader()
         dict_writer.writerows(report_list)
@@ -166,7 +171,7 @@ def main(cfg: DictConfig) -> None:
     if errors:
         logging.critical(f"Verification raised {len(errors)} errors:")
         errors_str = [str(e) for e in errors]
-        with open(outpath_csv_errors, 'w') as output_file:
+        with open(errors_csv, 'w') as output_file:
             output_file.writelines(errors_str)
         raise Exception(errors)
 
