@@ -128,5 +128,5 @@ def define_model(
     model.to(main_device)
     if state_dict_path:
         checkpoint = read_checkpoint(state_dict_path)
-        model.load_state_dict(state_dict=checkpoint['model_state_dict'], strict=state_dict_strict_load)
+        model.load_state_dict(state_dict=checkpoint['model'], strict=state_dict_strict_load)
     return model
