@@ -41,31 +41,19 @@ def read_checkpoint(filename, out_dir: str = 'checkpoints', update=True) -> Dict
         logging.warning(f"No path to checkpoint provided.")
         return None
     try:
-        logging.info(f"\n=> loading model '{filename}'")
+        logging.info(f"=> loading model '{filename}'\n")
+        # For loading external models with different structure in state dict. May cause problems when trying to load optimizer
         if is_url(filename):
             checkpoint = load_state_dict_from_url(url=filename, map_location='cpu', model_dir=to_absolute_path(out_dir))
         else:
             checkpoint = torch.load(f=filename, map_location='cpu')
-        # For loading external models with different structure in state dict.
-        if 'model_state_dict' not in checkpoint.keys() and 'model' not in checkpoint.keys():
-            val_set = set()
-            for val in checkpoint.values():
-                val_set.add(type(val))
-            if len(val_set) == 1 and list(val_set)[0] == torch.Tensor:
-                # places entire state_dict inside expected key
-                new_checkpoint = OrderedDict()
-                new_checkpoint['model_state_dict'] = OrderedDict({k: v for k, v in checkpoint.items()})
-                del checkpoint
-                checkpoint = new_checkpoint
-            else:
-                raise ValueError(f"GDL cannot find weight in provided checkpoint")
-        elif update:
-            checkpoint = update_gdl_checkpoint(checkpoint)
+        if 'model' not in checkpoint.keys():
+            temp_checkpoint = {'model': {k: v for k, v in checkpoint.items()}}  # Place entire state_dict inside 'model' key
+            del checkpoint
+            checkpoint = temp_checkpoint
         return checkpoint
-    except FileNotFoundError as e:
-        logging.critical(f"\n=> No model found at '{filename}'")
-        raise e
-
+    except FileNotFoundError:
+        raise FileNotFoundError(f"=> No model found at '{filename}'")
 
 def adapt_checkpoint_to_dp_model(checkpoint: dict, model: Union[nn.Module, nn.DataParallel]):
     """
