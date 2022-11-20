@@ -68,6 +68,7 @@ def vis_from_batch(vis_params,
                    dataset='',
                    ep_num=0,
                    scale=None,
+                   device=None,
                    debug=False):
     """ Provide indiviual input, output and label from batch to visualization function
     :param vis_params: (Dict) parameters useful during visualization
@@ -94,6 +95,7 @@ def vis_from_batch(vis_params,
             dataset=dataset,
             ep_num=ep_num,
             scale=scale,
+            device=device,
             debug=debug)
 
 def vis_from_dataloader(vis_params,
@@ -139,7 +141,8 @@ def vis_from_dataloader(vis_params,
                                    labels=labels,
                                    dataset=dataset,
                                    ep_num=ep_num,
-                                   scale=scale)
+                                   scale=scale,
+                                   device=device)
     logging.info(f'Saved visualization figures.\n')
 
 def vis(vis_params,
@@ -152,6 +155,7 @@ def vis(vis_params,
         ep_num=0,
         inference_input_path=None,
         scale=None,
+        device=None,
         debug=False):
     """saves input, output and label (if given) as .png in a grid or as individual pngs
     :param input_: (tensor) input array as pytorch tensor, e.g. as returned by dataloader
@@ -175,7 +179,7 @@ def vis(vis_params,
         'inference_input_path']:  # FIXME: function parameters should not come in as different types if inference or not.
         input_ = input_.cpu().permute(1, 2, 0).numpy()  # channels last
         if output.shape[0] == 1:
-            threshold = torch.tensor([0.5])
+            threshold = torch.tensor([0.5]).to(device)
             output = torch.sigmoid(output)  # use sigmoid for single class
             output = (output > threshold).float() * 1
             single_class_mode = True

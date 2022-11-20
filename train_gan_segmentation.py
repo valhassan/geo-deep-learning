@@ -143,7 +143,8 @@ def evaluation(eval_loader,
                                    labels=labels,
                                    dataset=dataset,
                                    ep_num=ep_idx + 1,
-                                   scale=scale)
+                                   scale=scale,
+                                   device=device)
             outputs_flatten = flatten_outputs(outputs, num_classes)
             labels_flatten = flatten_labels(labels)
             loss = criterion(outputs, labels_)

@@ -84,7 +84,8 @@ def training(train_loader,
                                labels=labels,
                                dataset='trn',
                                ep_num=ep_idx + 1,
-                               scale=scale)
+                               scale=scale,
+                               device=device)
 
         loss = criterion(outputs, labels) if num_classes > 1 else criterion(outputs, labels.unsqueeze(1).float())
 
@@ -181,7 +182,8 @@ def evaluation(eval_loader,
                                    labels=labels,
                                    dataset=dataset,
                                    ep_num=ep_idx + 1,
-                                   scale=scale)
+                                   scale=scale,
+                                   device=device)
 
             outputs_flatten = flatten_outputs(outputs, num_classes)
 
