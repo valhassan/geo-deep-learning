@@ -175,7 +175,9 @@ def vis(vis_params,
         'inference_input_path']:  # FIXME: function parameters should not come in as different types if inference or not.
         input_ = input_.cpu().permute(1, 2, 0).numpy()  # channels last
         if output.shape[0] == 1:
+            threshold = torch.tensor([0.5])
             output = torch.sigmoid(output)  # use sigmoid for single class
+            output = (output > threshold).float() * 1
             single_class_mode = True
         else:
             output = F.softmax(output, dim=0)  # use softmax for multiclass (note: not applied for inference)
