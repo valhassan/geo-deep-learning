@@ -168,6 +168,7 @@ def evaluation(eval_loader,
             # vis_batch_range: range of batches to perform visualization on. see README.md for more info.
             # vis_at_eval: (bool) if True, will perform visualization at eval time, as long as vis_batch_range is valid
             if vis_params['vis_batch_range'] and vis_params['vis_at_eval']:
+                logging.info(f'Batch Index: {batch_index}')
                 min_vis_batch, max_vis_batch, increment = vis_params['vis_batch_range']
                 if batch_index in range(min_vis_batch, max_vis_batch, increment):
                     vis_path = progress_log.parent.joinpath('visualization')
