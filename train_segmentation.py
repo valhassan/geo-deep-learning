@@ -157,7 +157,7 @@ def evaluation(eval_loader,
             labels_flatten = flatten_labels(labels)
 
             logging.info(f'Input Image Shape: {inputs.shape}')
-            logging.info(f'Input Image Unique Vals: {unique_values}')
+            # logging.info(f'Input Image Unique Vals: {unique_values}')
             outputs = model(inputs)
             unique_values_out = torch.unique(outputs)
             logging.info(f'Output Shape: {outputs.shape}')
