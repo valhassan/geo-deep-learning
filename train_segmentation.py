@@ -152,10 +152,16 @@ def evaluation(eval_loader,
         with torch.no_grad():
             inputs = data['sat_img'].to(device)
             labels = data['map_img'].to(device)
+            unique_values = torch.unique(inputs)
 
             labels_flatten = flatten_labels(labels)
 
+            logging.info(f'Input Image Shape: {inputs.shape}')
+            logging.info(f'Input Image Unique Vals: {unique_values}')
             outputs = model(inputs)
+            unique_values_out = torch.unique(outputs)
+            logging.info(f'Output Shape: {outputs.shape}')
+            logging.info(f'Output Unique Vals: {unique_values_out}')
             if isinstance(outputs, OrderedDict):
                 outputs = outputs['out']
 
