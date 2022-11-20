@@ -86,6 +86,7 @@ def vis_from_batch(vis_params,
     for batch_samp_index, zipped in enumerate(zip(inputs, labels, outputs)):
         epoch_samp_index = batch_samp_index + len(inputs) * batch_index
         input_, label, output = zipped
+        logging.info(f'vis_batch_range output shape: {output.shape}')
         vis(vis_params, input_, output,
             vis_path=vis_path,
             sample_num=epoch_samp_index+1,
