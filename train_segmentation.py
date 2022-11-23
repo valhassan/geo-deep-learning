@@ -153,23 +153,14 @@ def evaluation(eval_loader,
         with torch.no_grad():
             inputs = data['sat_img'].to(device)
             labels = data['map_img'].to(device)
-            unique_values = torch.unique(inputs)
-
             labels_flatten = flatten_labels(labels)
-
-            logging.info(f'Input Image Shape: {inputs.shape}')
-            # logging.info(f'Input Image Unique Vals: {unique_values}')
             outputs = model(inputs)
-            unique_values_out = torch.unique(outputs)
-            logging.info(f'Output Shape: {outputs.shape}')
-            logging.info(f'Output Unique Vals: {unique_values_out}')
             if isinstance(outputs, OrderedDict):
                 outputs = outputs['out']
 
             # vis_batch_range: range of batches to perform visualization on. see README.md for more info.
             # vis_at_eval: (bool) if True, will perform visualization at eval time, as long as vis_batch_range is valid
             if vis_params['vis_batch_range'] and vis_params['vis_at_eval']:
-                logging.info(f'Batch Index: {batch_index}')
                 min_vis_batch, max_vis_batch, increment = vis_params['vis_batch_range']
                 if batch_index in range(min_vis_batch, max_vis_batch, increment):
                     vis_path = progress_log.parent.joinpath('visualization')
