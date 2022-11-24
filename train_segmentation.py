@@ -178,7 +178,7 @@ def evaluation(eval_loader,
 
             outputs_flatten = flatten_outputs(outputs, num_classes)
 
-            loss = criterion(outputs, labels.unsqueeze(1).float())
+            loss = criterion(outputs, labels) if num_classes > 1 else criterion(outputs, labels.unsqueeze(1).float())
 
             eval_metrics['loss'].update(loss.item(), batch_size)
 
