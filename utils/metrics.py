@@ -31,7 +31,7 @@ def create_metrics_dict(num_classes, ignore_index=None):
             metrics_dict['iou_' + str(i)] = AverageMeter()
 
     # Add overall non-background iou metric
-    metrics_dict['iou_nonbg'] = AverageMeter()
+    metrics_dict['iou-nonbg'] = AverageMeter()
 
     return metrics_dict
 
@@ -108,7 +108,7 @@ def metric_match_device(metric: torchmetrics.Metric, pred: torch.Tensor, label: 
         metric.to(pred.device)
 
 
-def iou(pred, label, batch_size, num_classes, metric_dict, ignore_index=None):
+def iou(pred, label, batch_size, num_classes, metric_dict, binary=False, ignore_index=None):
     """Calculate the intersection over union class-wise and mean-iou"""
 
     num_classes = num_classes + 1 if num_classes == 1 else num_classes
@@ -130,7 +130,6 @@ def iou(pred, label, batch_size, num_classes, metric_dict, ignore_index=None):
                            absent_score=1)
     metric_match_device(jaccard, pred, label)
     cls_ious = jaccard(pred, label)
-
     
     if len(cls_ious) > 1:
         for i in range(len(cls_lst)):
@@ -139,14 +138,14 @@ def iou(pred, label, batch_size, num_classes, metric_dict, ignore_index=None):
     elif len(cls_ious) == 1:
         if f"iou_{cls_lst[0]}" in metric_dict.keys():
             metric_dict['iou_' + str(cls_lst[0])].update(cls_ious, batch_size)
-
-    jaccard_nobg = JaccardIndex(num_classes=num_classes, 
-                                average='macro', 
-                                ignore_index=0, 
-                                absent_score=1)
-    metric_match_device(jaccard_nobg, pred, label)
-    iou_nobg = jaccard_nobg(pred, label)
-    metric_dict['iou_nonbg'].update(iou_nobg.item(), batch_size)
+    if not binary:
+        jaccard_nobg = JaccardIndex(num_classes=num_classes,
+                                    average='macro',
+                                    ignore_index=0,
+                                    absent_score=1)
+        metric_match_device(jaccard_nobg, pred, label)
+        iou_nobg = jaccard_nobg(pred, label)
+        metric_dict['iou-nonbg'].update(iou_nobg.item(), batch_size)
 
     jaccard = JaccardIndex(num_classes=num_classes, 
                            average='macro', 
