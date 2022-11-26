@@ -143,6 +143,7 @@ def evaluation(eval_loader,
     :param debug: if True, debug functions will be performed
     :return: (dict) eval_metrics
     """
+    single_class_mode = True if num_classes == 1 else False
     eval_metrics = create_metrics_dict(num_classes)
     model.eval()
 
@@ -176,7 +177,7 @@ def evaluation(eval_loader,
                                    device=device)
             loss = criterion(outputs, labels) if num_classes > 1 else criterion(outputs, labels.unsqueeze(1).float())
             eval_metrics['loss'].update(loss.item(), batch_size)
-            if num_classes == 1:
+            if single_class_mode:
                 outputs = torch.sigmoid(outputs)
                 outputs = outputs.squeeze(dim=1)
             else:
@@ -187,9 +188,11 @@ def evaluation(eval_loader,
                     logging.error(f"\nBatch_metrics ({batch_metrics}) is smaller than batch size "
                                   f"{len(eval_loader)}. Metrics in validation loop won't be computed")
                 if (batch_index + 1) % batch_metrics == 0:  # +1 to skip val loop at very beginning
-                    eval_metrics = iou(outputs, labels, batch_size, num_classes, eval_metrics, dontcare)
+                    eval_metrics = iou(outputs, labels, batch_size, num_classes,
+                                       eval_metrics, single_class_mode, dontcare)
             elif (dataset == 'tst'):
-                eval_metrics = iou(outputs, labels, batch_size, num_classes, eval_metrics, dontcare)
+                eval_metrics = iou(outputs, labels, batch_size, num_classes,
+                                   eval_metrics, single_class_mode, dontcare)
             logging.debug(OrderedDict(dataset=dataset, loss=f'{eval_metrics["loss"].avg:.4f}'))
             if debug and device.type == 'cuda':
                 res, mem = gpu_stats(device=device.index)
@@ -202,6 +205,8 @@ def evaluation(eval_loader,
         logging.info(f"\n{dataset} Loss: {eval_metrics['loss'].avg:.4f}")
     if batch_metrics is not None or dataset == 'tst':
         logging.info(f"\n{dataset} iou: {eval_metrics['iou'].avg:.4f}")
+        logging.info(f"\n{dataset} iou_0: {eval_metrics['iou_0'].avg:.4f}")
+        logging.info(f"\n{dataset} iou_1: {eval_metrics['iou_1'].avg:.4f}")
 
     return eval_metrics
 
@@ -443,9 +448,10 @@ def train(cfg: DictConfig) -> None:
                               vis_params=vis_params,
                               debug=debug)
         if 'trn_log' in locals():  # only save the value if a tracker is setup
-            trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou',
-                                                          'segmentor-loss', 'discriminator-loss', 'real-score-critic',
-                                                          'fake-score-critic'])
+            trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall',
+                                                          'fscore', 'iou', 'iou-nonbg',
+                                                          'segmentor-loss', 'discriminator-loss',
+                                                          'real-score-critic', 'fake-score-critic'])
         val_report = evaluation(eval_loader=val_dataloader,
                                 model=model,
                                 criterion=criterion,
@@ -465,7 +471,8 @@ def train(cfg: DictConfig) -> None:
             if batch_metrics is not None:
                 val_log.add_values(val_report, epoch)
             else:
-                val_log.add_values(val_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou',
+                val_log.add_values(val_report, epoch, ignore=['precision', 'recall',
+                                                              'fscore', 'iou', 'iou-nonbg',
                                                               'segmentor-loss', 'discriminator-loss',
                                                               'real-score-critic', 'fake-score-critic'])
 
@@ -534,9 +541,9 @@ def train(cfg: DictConfig) -> None:
                                 device=device,
                                 dontcare=dontcare_val)
         if 'tst_log' in locals():  # only save the value if a tracker is set up
-            tst_log.add_values(tst_report, num_epochs, ignore=['precision', 'recall','fscore', 'segmentor-loss',
-                                                               'discriminator-loss', 'real-score-critic',
-                                                               'fake-score-critic'])
+            tst_log.add_values(tst_report, num_epochs,ignore=['precision','recall', 'iou-nonbg',
+                                                              'fscore','segmentor-loss','discriminator-loss',
+                                                              'real-score-critic', 'fake-score-critic'])
 
 
 def main(cfg: DictConfig) -> None:
