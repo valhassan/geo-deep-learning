@@ -141,5 +141,7 @@ def define_model(
     model.to(main_device)
     if state_dict_path:
         checkpoint = read_checkpoint(state_dict_path)
+        if len(devices) > 1:
+            checkpoint = adapt_checkpoint_to_dp_model(checkpoint, model)
         model.load_state_dict(state_dict=checkpoint['model_state_dict'], strict=state_dict_strict_load)
     return model
