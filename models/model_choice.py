@@ -47,13 +47,26 @@ def read_checkpoint(filename, out_dir: str = 'checkpoints', update=True) -> Dict
             checkpoint = load_state_dict_from_url(url=filename, map_location='cpu', model_dir=to_absolute_path(out_dir))
         else:
             checkpoint = torch.load(f=filename, map_location='cpu')
-        if 'model' not in checkpoint.keys():
-            temp_checkpoint = {'model': {k: v for k, v in checkpoint.items()}}  # Place entire state_dict inside 'model' key
-            del checkpoint
-            checkpoint = temp_checkpoint
+        # For loading external models with different structure in state dict.
+        if 'model_state_dict' not in checkpoint.keys() and 'model' not in checkpoint.keys():
+            val_set = set()
+            for val in checkpoint.values():
+                val_set.add(type(val))
+            if len(val_set) == 1 and list(val_set)[0] == torch.Tensor:
+                # places entire state_dict inside expected key
+                new_checkpoint = OrderedDict()
+                new_checkpoint['model_state_dict'] = OrderedDict({k: v for k, v in checkpoint.items()})
+                del checkpoint
+                checkpoint = new_checkpoint
+            else:
+                raise ValueError(f"GDL cannot find weight in provided checkpoint")
+        elif update:
+            checkpoint = update_gdl_checkpoint(checkpoint)
         return checkpoint
-    except FileNotFoundError:
-        raise FileNotFoundError(f"=> No model found at '{filename}'")
+    except FileNotFoundError as e:
+        logging.critical(f"\n=> No model found at '{filename}'")
+        raise e
+
 
 def adapt_checkpoint_to_dp_model(checkpoint: dict, model: Union[nn.Module, nn.DataParallel]):
     """
@@ -128,5 +141,5 @@ def define_model(
     model.to(main_device)
     if state_dict_path:
         checkpoint = read_checkpoint(state_dict_path)
-        model.load_state_dict(state_dict=checkpoint['model'], strict=state_dict_strict_load)
+        model.load_state_dict(state_dict=checkpoint['model_state_dict'], strict=state_dict_strict_load)
     return model
