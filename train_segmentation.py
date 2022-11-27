@@ -367,14 +367,8 @@ def train(cfg: DictConfig) -> None:
         state_dict_path=train_state_dict_path,
         state_dict_strict_load=state_dict_strict,
     )
-    criterion = define_loss(loss_params=cfg.loss, class_weights=class_weights)
-    criterion = criterion.to(device)
-    optimizer = instantiate(cfg.optimizer, params=model.parameters())
-    lr_scheduler = optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=step_size, gamma=gamma)
-
     logging.info(f'\nInstantiated {cfg.model._target_} model with {num_bands} input channels and {num_classes} output '
                  f'classes.')
-
     logging.info(f'\nCreating dataloaders from data in {tiles_dir}...')
     trn_dataloader, val_dataloader, tst_dataloader = create_dataloader(samples_folder=tiles_dir,
                                                                        batch_size=batch_size,
@@ -390,6 +384,13 @@ def train(cfg: DictConfig) -> None:
                                                                        cfg=cfg,
                                                                        dontcare2backgr=dontcare2backgr,
                                                                        debug=debug)
+    lr_steps_per_epoch = len(trn_dataloader)
+    criterion = define_loss(loss_params=cfg.loss, class_weights=class_weights)
+    criterion = criterion.to(device)
+    optimizer = instantiate(cfg.optimizer, params=model.parameters())
+    # lr_scheduler = optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=step_size, gamma=gamma)
+    lr_scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.01, steps_per_epoch=lr_steps_per_epoch,
+                                                 epochs=num_epochs)
 
     # Save tracking
     set_tracker(mode='train', type='mlflow', task='segmentation', experiment_name=experiment_name, run_name=run_name,
