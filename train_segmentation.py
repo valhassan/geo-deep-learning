@@ -390,7 +390,7 @@ def train(cfg: DictConfig) -> None:
     optimizer = instantiate(cfg.optimizer, params=model.parameters())
     # lr_scheduler = optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=step_size, gamma=gamma)
     lr_scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.01, steps_per_epoch=lr_steps_per_epoch,
-                                                 epochs=num_epochs)
+                                                 epochs=num_epochs+2 if num_epochs == 0 else num_epochs)
 
     # Save tracking
     set_tracker(mode='train', type='mlflow', task='segmentation', experiment_name=experiment_name, run_name=run_name,
