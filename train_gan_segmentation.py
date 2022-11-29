@@ -227,8 +227,9 @@ def train(cfg: DictConfig) -> None:
     data_path = get_key_def('tiling_data_dir', cfg['tiling'], to_path=True, validate_path_exists=True)
     if not data_path.is_dir():
         raise FileNotFoundError(f'Could not locate data path {data_path}')
-    tiles_dir_name = make_tiles_dir_name(samples_size, num_bands)
-    tiles_dir = data_path / experiment_name / tiles_dir_name
+    # tiles_dir_name = make_tiles_dir_name(samples_size, num_bands)
+    # tiles_dir = data_path / experiment_name / tiles_dir_name
+    tiles_dir = data_path / experiment_name
 
     # automatic model naming with unique id for each training
     config_path = None
