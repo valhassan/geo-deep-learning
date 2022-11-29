@@ -116,6 +116,7 @@ def evaluation(eval_loader,
                debug=False,
                dontcare=-1,
                ):
+    single_class_mode = True if num_classes == 1 else False
     segmentor.eval()
     eval_metrics = create_metrics_dict(num_classes=num_classes)
 
@@ -124,8 +125,6 @@ def evaluation(eval_loader,
                                                                                       f'batches with {device.type}')):
             inputs = data['sat_img'].to(device)
             labels = data['map_img'].to(device)
-            labels_ = labels.unsqueeze(1).float()
-
             outputs = segmentor(inputs)
 
             # vis_batch_range: range of batches to perform visualization on.
@@ -145,38 +144,39 @@ def evaluation(eval_loader,
                                    ep_num=ep_idx + 1,
                                    scale=scale,
                                    device=device)
-            outputs_flatten = flatten_outputs(outputs, num_classes)
-            labels_flatten = flatten_labels(labels)
-            loss = criterion(outputs, labels_)
+            loss = criterion(outputs, labels) if num_classes > 1 else criterion(outputs, labels.unsqueeze(1).float())
             eval_metrics['loss'].update(loss.item(), batch_size)
+            if single_class_mode:
+                outputs = torch.sigmoid(outputs)
+                outputs = outputs.squeeze(dim=1)
+            else:
+                outputs = torch.softmax(outputs, dim=1)
             if (dataset == 'val') and (batch_metrics is not None):
                 # Compute metrics every n batches. Time consuming.
                 if not batch_metrics <= len(eval_loader):
                     logging.error(f"\nBatch_metrics ({batch_metrics}) is smaller than batch size "
                                   f"{len(eval_loader)}. Metrics in validation loop won't be computed")
                 if (batch_index + 1) % batch_metrics == 0:  # +1 to skip val loop at very beginning
-                    a, segmentation = torch.max(outputs_flatten, dim=1)
-                    eval_metrics = iou(segmentation, labels_flatten, batch_size, num_classes, eval_metrics, dontcare)
-                    eval_metrics = report_classification(segmentation, labels_flatten, batch_size, eval_metrics,
-                                                         ignore_index=dontcare)
-            elif dataset == 'tst':
-                a, segmentation = torch.max(outputs_flatten, dim=1)
-                eval_metrics = iou(segmentation, labels_flatten, batch_size, num_classes, eval_metrics, dontcare)
-                eval_metrics = report_classification(segmentation, labels_flatten, batch_size, eval_metrics,
-                                                     ignore_index=dontcare)
+                    eval_metrics = iou(outputs, labels, batch_size, num_classes,
+                                       eval_metrics, single_class_mode, dontcare)
+            elif (dataset == 'tst'):
+                eval_metrics = iou(outputs, labels, batch_size, num_classes,
+                                   eval_metrics, single_class_mode, dontcare)
             logging.debug(OrderedDict(dataset=dataset, loss=f'{eval_metrics["loss"].avg:.4f}'))
             if debug and device.type == 'cuda':
                 res, mem = gpu_stats(device=device.index)
                 logging.debug(OrderedDict(
                     device=device, gpu_perc=f"{res['gpu']} %",
-                    gpu_RAM=f"{mem['used'] / (1024 ** 2):.0f}/{mem['total'] / (1024 ** 2):.0f} MiB"))
-        if eval_metrics['loss'].avg:
-            logging.info(f"\n{dataset} Loss: {eval_metrics['loss'].avg:.4f}")
-        if batch_metrics is not None or dataset == 'tst':
-            logging.info(f"\n{dataset} precision: {eval_metrics['precision'].avg:.4f}")
-            logging.info(f"\n{dataset} recall: {eval_metrics['recall'].avg:.4f}")
-            logging.info(f"\n{dataset} fscore: {eval_metrics['fscore'].avg:.4f}")
-            logging.info(f"\n{dataset} iou: {eval_metrics['iou'].avg:.4f}")
+                    gpu_RAM=f"{mem['used']/(1024**2):.0f}/{mem['total']/(1024**2):.0f} MiB"
+                ))
+
+    if eval_metrics['loss'].avg:
+        logging.info(f"\n{dataset} Loss: {eval_metrics['loss'].avg:.4f}")
+    if batch_metrics is not None or dataset == 'tst':
+        logging.info(f"\n{dataset} iou: {eval_metrics['iou'].avg:.4f}")
+        logging.info(f"\n{dataset} iou_0: {eval_metrics['iou_0'].avg:.4f}")
+        logging.info(f"\n{dataset} iou_1: {eval_metrics['iou_1'].avg:.4f}")
+
     return eval_metrics
 
 
@@ -398,12 +398,11 @@ def train(cfg: DictConfig) -> None:
             if batch_metrics is not None:
                 val_log.add_values(val_report, epoch)
             else:
-                val_log.add_values(val_report, epoch, ignore=['precision', 'recall',
-                                                              'fscore', 'iou',
-                                                              'segmentor-loss',
-                                                              'discriminator-loss',
-                                                              'real-score-critic',
-                                                              'fake-score-critic'])
+                val_log.add_values(val_report, epoch, ignore=['precision', 'recall','fscore',
+                                                              'segmentor-loss', 'discriminator-loss',
+                                                              'real-score-critic', 'fake-score-critic',
+                                                              'iou', 'iou-nonbg'
+                                                              ])
         val_loss = val_report['loss'].avg
         if val_loss < best_loss:
             logging.info("\nSave checkpoints with a validation loss of {:.4f}".format(val_loss))  # only allow 4 decimals
@@ -478,11 +477,11 @@ def train(cfg: DictConfig) -> None:
                                 dataset='tst',
                                 debug=debug,
                                 dontcare=dontcare_val)
-        if 'tst_log' in locals():  # only save the value if a tracker is setup
-            tst_log.add_values(tst_report, num_epochs, ignore=['segmentor-loss',
-                                                               'discriminator-loss',
-                                                               'real-score-critic',
-                                                               'fake-score-critic'])
+        if 'tst_log' in locals():  # only save the value if a tracker is set up
+            tst_log.add_values(tst_report, num_epochs,ignore=['precision','recall', 'iou-nonbg',
+                                                              'fscore','segmentor-loss','discriminator-loss',
+                                                              'real-score-critic', 'fake-score-critic'])
+
 
 def main(cfg: DictConfig) -> None:
     """
