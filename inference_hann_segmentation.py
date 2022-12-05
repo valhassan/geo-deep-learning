@@ -109,9 +109,9 @@ def gen_img_samples(src, patch_list, *band_order):
         window = Window.from_slices(slice(patch_y, patch_y + patch_height),
                                     slice(patch_x, patch_x + patch_width))
         if band_order:
-            patch_array = reshape_as_image(src.read(band_order[0], window=window))
+            patch_array = reshape_as_image(src.read(band_order[0], window=window, boundless=True, fill_value=src.nodata))
         else:
-            patch_array = reshape_as_image(src.read(window=window))
+            patch_array = reshape_as_image(src.read(window=window, boundless=True, fill_value=src.nodata))
 
         yield patch_array, (patch_y, patch_height), (patch_x, patch_width), hann_window
 
@@ -153,94 +153,54 @@ def segmentation(param,
     start_seg = time.time()
     print_log = True if logging.level == 20 else False  # 20 is INFO
     model.eval()  # switch to evaluate mode
-
-    patch_list = generate_patch_list(input_image.width, input_image.height, chunk_size, use_hanning)
-
+    # initialize test time augmentation
+    transforms = tta.aliases.d4_transform()
+    tf_len = len(transforms)
+    h_padded, w_padded = input_image.height + chunk_size, input_image.width + chunk_size
+    patch_list = generate_patch_list(w_padded, h_padded, chunk_size, use_hanning)
+    pred_img = np.zeros((tf_len, h_padded , w_padded, num_classes), dtype=np.float16)
     img_gen = gen_img_samples(src=input_image, patch_list=patch_list)
     for patch, h_idxs, w_idxs, hann_win in tqdm(img_gen, position=1, leave=False,
-                                          desc=f'Inferring on patches{chunk_size}'):
-
-        logging.info(f'patch_size: {patch.shape} '
-                     f'hann_size: {hann_win.shape} '
-                     f'row_index: {h_idxs} '
-                     f'col_index: {w_idxs}')
-
-
-
-
-
-    # single_class_mode = False if num_classes > 1 else True
-    # for sub_image, row, col in tqdm(img_gen, position=1, leave=False,
-    #                 desc=f'Inferring on patches{chunk_size}',
-    #                 total=total_inf_windows):
-    #     image_metadata = add_metadata_from_raster_to_sample(sat_img_arr=sub_image,
-    #                                                         raster_handle=input_image,
-    #                                                         raster_info={})
-    #
-    #     sample['metadata'] = image_metadata
-    #     totensor_transform = augmentation.compose_transforms(param,
-    #                                                          dataset="tst",
-    #                                                          scale=scale,
-    #                                                          aug_type='totensor',
-    #                                                          print_log=print_log)
-    #     sample['sat_img'] = sub_image
-    #     sample = totensor_transform(sample)
-    #     inputs = sample['sat_img'].unsqueeze_(0)
-    #     inputs = inputs.to(device)
-    #     if inputs.shape[1] == 4 and any("module.modelNIR" in s for s in model.state_dict().keys()):
-    #         # Init NIR   TODO: make a proper way to read the NIR channel
-    #         #                  and put an option to be able to give the index of the NIR channel
-    #         inputs_NIR = inputs[:, -1, ...]  # Extract the NIR channel -> [batch size, H, W] since it's only one channel
-    #         inputs_NIR.unsqueeze_(1)  # add a channel to get the good size -> [:, 1, :, :]
-    #         inputs = inputs[:, :-1, ...]  # take out the NIR channel and take only the RGB for the inputs
-    #         inputs = [inputs, inputs_NIR]
-    #     output_lst = []
-    #     for transformer in transforms:
-    #         # augment inputs
-    #         augmented_input = transformer.augment_image(inputs)
-    #         with torch.cuda.amp.autocast():
-    #             augmented_output = model(augmented_input)
-    #         if isinstance(augmented_output, OrderedDict) and 'out' in augmented_output.keys():
-    #             augmented_output = augmented_output['out']
-    #         logging.debug(f'Shape of augmented output: {augmented_output.shape}')
-    #         # reverse augmentation for outputs
-    #         deaugmented_output = transformer.deaugment_mask(augmented_output)
-    #         if single_class_mode:
-    #             deaugmented_output = deaugmented_output.squeeze(dim=0)
-    #         else:
-    #             deaugmented_output = F.softmax(deaugmented_output, dim=1).squeeze(dim=0)
-    #         output_lst.append(deaugmented_output)
-    #     outputs = torch.stack(output_lst)
-    #     outputs = torch.mul(outputs, WINDOW_SPLINE_2D)
-    #     outputs = outputs.permute(0, 2, 3, 1)
-    #     outputs = outputs.reshape(tf_len, pad, pad, num_classes).cpu().numpy().astype('float16')
-    #     outputs = outputs[:, dist_samples:-dist_samples, dist_samples:-dist_samples, :]
-    #     fp[:, row:row + chunk_size, col:col + chunk_size, :] += outputs
-    # fp.flush()
-    # del fp
-    #
-    # fp = np.memmap(tp_mem, dtype='float16', mode='r', shape=(2, h_padded, w_padded, num_classes))
-    # pred_img = np.zeros((h_padded, w_padded), dtype=np.uint8)
-    # for row, col in tqdm(itertools.product(range(0, input_image.height, chunk_size),
-    #                                        range(0, input_image.width, chunk_size)),
-    #                      leave=False, total=total_inf_windows, desc="Writing to array"):
-    #     arr1 = (fp[:, row:row + chunk_size, col:col + chunk_size, :] / (2 ** 2)).max(axis=0)
-    #     if single_class_mode:
-    #         arr1 = sigmoid(arr1)
-    #         arr1 = (arr1 > threshold)
-    #         arr1 = np.squeeze(arr1, axis=2).astype(np.uint8)
-    #     else:
-    #         arr1 = softmax(arr1)
-    #         arr1 = np.argmax(arr1, axis=-1).astype(np.uint8)
-    #     pred_img[row:row + chunk_size, col:col + chunk_size] = arr1
-    #
-    # end_seg = time.time() - start_seg
-    # logging.info('Segmentation operation completed in {:.0f}m {:.0f}s'.format(end_seg // 60, end_seg % 60))
-    #
-    # if debug:
-    #     logging.debug(f'Bin count of final output: {np.unique(pred_img, return_counts=True)}')
-    # input_image.close()
-    # return None
+                                                desc=f'Inferring on patches'):
+        hann_win = np.expand_dims(hann_win, -1)
+        image_metadata = add_metadata_from_raster_to_sample(sat_img_arr=patch,
+                                                            raster_handle=input_image,
+                                                            raster_info={})
+        sample['metadata'] = image_metadata
+        totensor_transform = augmentation.compose_transforms(param,
+                                                             dataset='tst',
+                                                             scale=scale,
+                                                             aug_type='totensor',
+                                                             print_log=print_log)
+        sample['sat_img']=patch
+        sample= totensor_transform(sample)
+        inputs = sample['sat_img'].unsqueeze_(0)
+        inputs = inputs.to(device)
+        output_lst = []
+        for transformer in transforms:
+            # augment inputs
+            augmented_input = transformer.augment_image(inputs)
+            with torch.cuda.amp.autocast():
+                augmented_output = model(augmented_input)
+            if isinstance(augmented_output, OrderedDict) and 'out' in augmented_output.keys():
+                augmented_output = augmented_output['out']
+            logging.debug(f'Shape of augmented output: {augmented_output.shape}')
+            # reverse augmentation for outputs
+            deaugmented_output = transformer.deaugment_mask(augmented_output).squeeze(dim=0)
+            output_lst.append(deaugmented_output)
+        outputs = torch.stack(output_lst)
+        outputs = outputs.permute(0, 2, 3, 1).squeeze(dim=0)
+        outputs = outputs.cpu().numpy() * hann_win
+        pred_img[:, h_idxs[0]:h_idxs[0]+h_idxs[1], w_idxs[0]:w_idxs[0]+w_idxs[1], :] += outputs
+    pred_img = sigmoid(pred_img.mean(axis=0))
+    pred_img = (pred_img > threshold)
+    pred_img = np.squeeze(pred_img, axis=2).astype(np.uint8)
+    end_seg = time.time() - start_seg
+    logging.info('Segmentation operation completed in {:.0f}m {:.0f}s'.format(end_seg // 60, end_seg % 60))
+    if debug:
+        logging.debug(f'Bin count of final output: {np.unique(pred_img, return_counts=True)}')
+    input_image.close()
+    return pred_img[:input_image.height, :input_image.width]
 
 
 def calc_inference_chunk_size(gpu_devices_dict: dict, max_pix_per_mb_gpu: int = 200, default: int = 512) -> int:
@@ -324,7 +284,7 @@ def main(params: Union[DictConfig, dict]) -> None:
     run_name = get_key_def(['tracker', 'run_name'], params, default='gdl')
     tracker_uri = get_key_def(['tracker', 'uri'], params, default=None, expected_type=str, to_path=True)
     set_tracker(mode='inference', type='mlflow', task='segmentation', experiment_name=exper_name, run_name=run_name,
-                tracker_uri=tracker_uri, params=params, keys2log=['general', 'dataset', 'model', 'inference'])
+                tracker_uri=tracker_uri, params=params, keys2log=['inference', 'augmentation'])
 
     # OPTIONAL PARAMETERS
     num_devices = get_key_def('gpu', params['inference'], default=0, expected_type=(int, bool))
@@ -382,25 +342,25 @@ def main(params: Union[DictConfig, dict]) -> None:
                             tp_mem=temp_file,
                             debug=debug)
 
-        # pred = pred[np.newaxis, :, :].astype(np.uint8)
-        # inf_meta.update({"driver": "GTiff",
-        #                  "height": pred.shape[1],
-        #                  "width": pred.shape[2],
-        #                  "count": pred.shape[0],
-        #                  "dtype": 'uint8',
-        #                  "compress": 'lzw'})
-        # logging.info(f'\nSuccessfully inferred on {aoi.raster_name}\nWriting to file: {inference_image}')
-        # with rasterio.open(inference_image, 'w+', **inf_meta) as dest:
-        #     dest.write(pred)
-        # del pred
-        # try:
-        #     temp_file.unlink()
-        # except OSError as e:
-        #     logging.warning(f'File Error: {temp_file, e.strerror}')
-        # if raster_to_vec:
-        #     start_vec = time.time()
-        #     inference_vec = working_folder.joinpath(aoi.raster_name.parent.name,
-        #                                             f"{aoi.raster_name.stem}_inference.gpkg")
-        #     ras2vec(inference_image, inference_vec)
-        #     end_vec = time.time() - start_vec
-        #     logging.info('Vectorization completed in {:.0f}m {:.0f}s'.format(end_vec // 60, end_vec % 60))
+        pred = pred[np.newaxis, :, :].astype(np.uint8)
+        inf_meta.update({"driver": "GTiff",
+                         "height": pred.shape[1],
+                         "width": pred.shape[2],
+                         "count": pred.shape[0],
+                         "dtype": 'uint8',
+                         "compress": 'lzw'})
+        logging.info(f'\nSuccessfully inferred on {aoi.raster_name}\nWriting to file: {inference_image}')
+        with rasterio.open(inference_image, 'w+', **inf_meta) as dest:
+            dest.write(pred)
+        del pred
+        try:
+            temp_file.unlink()
+        except OSError as e:
+            logging.warning(f'File Error: {temp_file, e.strerror}')
+        if raster_to_vec:
+            start_vec = time.time()
+            inference_vec = working_folder.joinpath(aoi.raster_name.parent.name,
+                                                    f"{aoi.raster_name.stem}_inference.gpkg")
+            ras2vec(inference_image, inference_vec)
+            end_vec = time.time() - start_vec
+            logging.info('Vectorization completed in {:.0f}m {:.0f}s'.format(end_vec // 60, end_vec % 60))
