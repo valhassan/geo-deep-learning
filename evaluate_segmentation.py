@@ -16,7 +16,7 @@ from dataset.aoi import aois_from_csv
 from utils.geoutils import vector_to_raster
 from utils.metrics import ComputePixelMetrics
 from utils.utils import get_key_def
-from utils.logger import get_logger
+from utils.logger import get_logger, set_tracker
 
 logging = get_logger(__name__)
 
@@ -48,7 +48,7 @@ def metrics_per_tile(label_arr: np.ndarray, pred_img: np.ndarray, input_image: r
         pixelMetrics = ComputePixelMetrics(label.flatten(), pred.flatten(), num_classes)
         eval = pixelMetrics.update(pixelMetrics.iou)
         feature['id_image'].append(gpkg_name)
-        for c_num in range(num_classes):
+        for c_num in range(num_classes + 1 if num_classes == 1 else num_classes):
             feature['L_count_' + str(c_num)].append(int(np.count_nonzero(label == c_num)))
             feature['P_count_' + str(c_num)].append(int(np.count_nonzero(pred == c_num)))
             feature['IoU_' + str(c_num)].append(eval['iou_' + str(c_num)])
@@ -96,6 +96,13 @@ def main(params):
     attribute_field = get_key_def('attribute_field', params['dataset'], None, expected_type=str)
     attr_vals = get_key_def('attribute_values', params['dataset'], None, expected_type=Sequence)
 
+    # LOGGING PARAMETERS
+    exper_name = get_key_def('project_name', params['general'], default='gdl-training')
+    run_name = get_key_def(['tracker', 'run_name'], params, default='gdl')
+    tracker_uri = get_key_def(['tracker', 'uri'], params, default=None, expected_type=str, to_path=True)
+    set_tracker(mode='evaluate', type='mlflow', task='segmentation', experiment_name=exper_name, run_name=run_name,
+                tracker_uri=tracker_uri, params=params, keys2log=['inference', 'augmentation'])
+
     # Assert that all values are integers (ex.: to benchmark single-class model with multi-class labels)
     if attr_vals:
         for item in attr_vals:
@@ -124,12 +131,12 @@ def main(params):
         pred = rasterio.open(inference_image).read()[0, ...]
 
         logging.info(f'\nBurning label as raster: {aoi.label}')
-        raster = rasterio.open(aoi.raster_name, 'r')
-        logging.info(f'\nReading image: {raster.name}')
-        inf_meta = raster.meta
+        # raster = rasterio.open(aoi.raster_name, 'r')
+        # logging.info(f'\nReading image: {raster.name}')
+        inf_meta = aoi.raster.meta
 
         label = vector_to_raster(vector_file=aoi.label,
-                                 input_image=raster,
+                                 input_image=aoi.raster,
                                  out_shape=(inf_meta['height'], inf_meta['width']),
                                  attribute_name=attribute_field,
                                  fill=0,  # background value in rasterized vector.
@@ -138,7 +145,7 @@ def main(params):
             logging.debug(f'\nUnique values in loaded label as raster: {np.unique(label)}\n'
                           f'Shape of label as raster: {label.shape}')
 
-        gdf = metrics_per_tile(label_arr=label, pred_img=pred, input_image=raster, chunk_size=chunk_size,
+        gdf = metrics_per_tile(label_arr=label, pred_img=pred, input_image=aoi.raster, chunk_size=chunk_size,
                                gpkg_name=aoi.label.stem, num_classes=num_classes)
 
         gdf_.append(gdf.to_crs(4326))
