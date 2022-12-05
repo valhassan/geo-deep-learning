@@ -226,7 +226,7 @@ def segmentation(param,
     for row, col in tqdm(itertools.product(range(0, input_image.height, chunk_size),
                                            range(0, input_image.width, chunk_size)),
                          leave=False, total=total_inf_windows, desc="Writing to array"):
-        arr1 = (fp[:, row:row + chunk_size, col:col + chunk_size, :] / (2 ** 2)).max(axis=0)
+        arr1 = (fp[:, row:row + chunk_size, col:col + chunk_size, :]).max(axis=0)
         if single_class_mode:
             arr1 = sigmoid(arr1)
             arr1 = (arr1 > threshold)
