@@ -174,7 +174,7 @@ class AOI(object):
             raise ValueError(f"Requested bands should be a list."
                              f"\nGot {raster_bands_request} of type {type(raster_bands_request)}")
         self.raster_bands_request = raster_bands_request
-        logging.info(f'Stac Image: {self.raster_raw_input}')
+        # logging.info(f'Stac Image: {self.raster_raw_input}')
         raster_parsed = self.parse_input_raster(
             csv_raster_str=self.raster_raw_input,
             raster_bands_requested=self.raster_bands_request
@@ -237,7 +237,7 @@ class AOI(object):
 
         # Check label data
         if label:
-            logging.info(f'image: {self.raster_multiband}, label: {label}')
+            # logging.info(f'image: {self.raster_multiband}, label: {label}')
             self.label = Path(label)
             self.label_gdf = _check_gdf_load(str(label))
             self.bounds_iou = self.bounds_iou_gdf_riodataset(
