@@ -7,7 +7,7 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 import rasterio
-from mlflow import log_metrics
+from mlflow import log_metrics, start_run
 from shapely.geometry import Polygon
 from tqdm import tqdm
 import geopandas as gpd
@@ -122,39 +122,40 @@ def main(params):
     gpkg_name_ = []
 
     for aoi in tqdm(list_aois, desc='Evaluating from input list', position=0, leave=True):
-        Path.mkdir(working_folder / aoi.raster_name.parent.name, parents=True, exist_ok=True)
-        inference_image = working_folder / aoi.raster_name.parent.name / f"{aoi.raster_name.stem}_inference.tif"
-        if not inference_image.is_file():
-            raise FileNotFoundError(f"Couldn't locate inference to evaluate metrics with. Make inferece has been run "
-                                    f"before you run evaluate mode.")
+        with start_run(run_name=f'{aoi.raster_name.stem}', nested=True):
+            Path.mkdir(working_folder / aoi.raster_name.parent.name, parents=True, exist_ok=True)
+            inference_image = working_folder / aoi.raster_name.parent.name / f"{aoi.raster_name.stem}_inference.tif"
+            if not inference_image.is_file():
+                raise FileNotFoundError(f"Couldn't locate inference to evaluate metrics with. Make inferece has been run "
+                                        f"before you run evaluate mode.")
 
-        pred = rasterio.open(inference_image).read()[0, ...]
+            pred = rasterio.open(inference_image).read()[0, ...]
 
-        logging.info(f'\nBurning label as raster: {aoi.label}')
-        # raster = rasterio.open(aoi.raster_name, 'r')
-        # logging.info(f'\nReading image: {raster.name}')
-        inf_meta = aoi.raster.meta
+            logging.info(f'\nBurning label as raster: {aoi.label}')
+            # raster = rasterio.open(aoi.raster_name, 'r')
+            # logging.info(f'\nReading image: {raster.name}')
+            inf_meta = aoi.raster.meta
 
-        label = vector_to_raster(vector_file=aoi.label,
-                                 input_image=aoi.raster,
-                                 out_shape=(inf_meta['height'], inf_meta['width']),
-                                 attribute_name=attribute_field,
-                                 fill=0,  # background value in rasterized vector.
-                                 attribute_values=attr_vals)
-        if debug:
-            logging.debug(f'\nUnique values in loaded label as raster: {np.unique(label)}\n'
-                          f'Shape of label as raster: {label.shape}')
+            label = vector_to_raster(vector_file=aoi.label,
+                                     input_image=aoi.raster,
+                                     out_shape=(inf_meta['height'], inf_meta['width']),
+                                     attribute_name=attribute_field,
+                                     fill=0,  # background value in rasterized vector.
+                                     attribute_values=attr_vals)
+            if debug:
+                logging.debug(f'\nUnique values in loaded label as raster: {np.unique(label)}\n'
+                              f'Shape of label as raster: {label.shape}')
 
-        gdf = metrics_per_tile(label_arr=label, pred_img=pred, input_image=aoi.raster, chunk_size=chunk_size,
-                               gpkg_name=aoi.label.stem, num_classes=num_classes)
+            gdf = metrics_per_tile(label_arr=label, pred_img=pred, input_image=aoi.raster, chunk_size=chunk_size,
+                                   gpkg_name=aoi.label.stem, num_classes=num_classes)
 
-        gdf_.append(gdf.to_crs(4326))
-        gpkg_name_.append(aoi.label.stem)
+            gdf_.append(gdf.to_crs(4326))
+            gpkg_name_.append(aoi.label.stem)
 
-        if 'tracker_uri' in locals():
-            pixelMetrics = ComputePixelMetrics(label, pred, num_classes)
-            log_metrics(pixelMetrics.update(pixelMetrics.iou))
-            log_metrics(pixelMetrics.update(pixelMetrics.dice))
+            if 'tracker_uri' in locals():
+                pixelMetrics = ComputePixelMetrics(label, pred, num_classes)
+                log_metrics(pixelMetrics.update(pixelMetrics.iou))
+                log_metrics(pixelMetrics.update(pixelMetrics.dice))
 
     if not len(gdf_) == len(gpkg_name_):
         raise logging.critical(ValueError('\nbenchmarking unable to complete'))
