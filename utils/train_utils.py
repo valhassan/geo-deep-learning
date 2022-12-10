@@ -70,7 +70,7 @@ def get_num_samples(samples_path, params, min_annot_perc, attr_vals, experiment_
                 # FIXME: user should decide whether or not this is used (very time consuming)
                 samples_weight = np.ones(num_samples[dataset])
                 for x in tqdm(range(num_samples[dataset]), desc="Computing sample weights"):
-                    label_file = datalist[x].split(';')[1]
+                    label_file = samples_path / datalist[x].split(';')[1]
                     with rasterio.open(label_file, 'r') as label_handle:
                         label = label_handle.read()
                     unique_labels = np.unique(label)

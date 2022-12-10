@@ -84,6 +84,7 @@ class SegmentationDataset(Dataset):
         self.debug = debug
         self.dontcare = dontcare
         self.list_path = dataset_list_path
+        self.parent_folder = dataset_list_path.parent
         if not Path(self.list_path).is_file():
             logging.error(f"Couldn't locate dataset list file: {self.list_path}.\n"
                           f"If purposely omitting test set, this error can be ignored")
@@ -101,10 +102,12 @@ class SegmentationDataset(Dataset):
         with open(self.list_path, 'r') as datafile:
             datalist = datafile.readlines()
             data_line = datalist[index]
-            with rasterio.open(data_line.split(';')[0], 'r') as sat_handle:
+            sat_file = self.parent_folder / data_line.split(';')[0]
+            label_file = self.parent_folder / data_line.split(';')[1].rstrip('\n')
+            with rasterio.open(sat_file, 'r') as sat_handle:
                 sat_img = reshape_as_image(sat_handle.read())
                 metadata = sat_handle.meta
-            with rasterio.open(data_line.split(';')[1].rstrip('\n'), 'r') as label_handle:
+            with rasterio.open(label_file, 'r') as label_handle:
                 map_img = reshape_as_image(label_handle.read())
                 map_img = map_img[..., 0]
 

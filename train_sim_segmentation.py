@@ -215,16 +215,16 @@ def train(cfg: DictConfig) -> None:
     device = set_device(gpu_devices_dict=gpu_devices_dict)
 
     trn_dataset, sampler = create_dataloader(samples_folder=tiles_dir,
-                                       batch_size=batch_size,
-                                       dontcare_val=dontcare_val,
-                                       crop_size=crop_size,
-                                       num_bands=num_bands,
-                                       min_annot_perc=min_annot_perc,
-                                       attr_vals=attr_vals,
-                                       scale=scale,
-                                       cfg=cfg,
-                                       dontcare2backgr=dontcare2backgr,
-                                       debug=debug)
+                                             batch_size=batch_size,
+                                             dontcare_val=dontcare_val,
+                                             crop_size=crop_size,
+                                             num_bands=num_bands,
+                                             min_annot_perc=min_annot_perc,
+                                             attr_vals=attr_vals,
+                                             scale=scale,
+                                             cfg=cfg,
+                                             dontcare2backgr=dontcare2backgr,
+                                             debug=debug)
     d = {}
     workers = [x for x in range(2, mp.cpu_count(), 2)]
     logging.info(f'Number of CPUs: {mp.cpu_count()}')
