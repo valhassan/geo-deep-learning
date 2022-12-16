@@ -165,7 +165,7 @@ def segmentation(param,
     WINDOW_SPLINE_2D = torch.as_tensor(np.moveaxis(WINDOW_SPLINE_2D, 2, 0), ).type(torch.float)
     WINDOW_SPLINE_2D = WINDOW_SPLINE_2D.to(device)
 
-    fp = np.memmap(tp_mem, dtype='float16', mode='w+', shape=(2, h_padded, w_padded, num_classes))
+    fp = np.memmap(tp_mem, dtype='float16', mode='w+', shape=(tf_len, h_padded, w_padded, num_classes))
     step = int(chunk_size / subdiv)
     total_inf_windows = int(np.ceil(input_image.height / step) * np.ceil(input_image.width / step))
     img_gen = gen_img_samples(src=input_image, chunk_size=chunk_size, step=step)
@@ -219,7 +219,7 @@ def segmentation(param,
     fp.flush()
     del fp
 
-    fp = np.memmap(tp_mem, dtype='float16', mode='r', shape=(2, h_padded, w_padded, num_classes))
+    fp = np.memmap(tp_mem, dtype='float16', mode='r', shape=(tf_len, h_padded, w_padded, num_classes))
     pred_img = np.zeros((h_padded, w_padded), dtype=np.uint8)
     for row, col in tqdm(itertools.product(range(0, input_image.height, chunk_size),
                                            range(0, input_image.width, chunk_size)),
