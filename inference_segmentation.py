@@ -118,8 +118,6 @@ def gen_img_samples(src, chunk_size, step, *band_order):
 
 def sigmoid(x):
    return 1/(1+np.exp(-x))
-def softmax(x):
-    return np.exp(x - np.max(x)) / np.exp(x - np.max(x)).sum()
 
 @torch.no_grad()
 def segmentation(param,
@@ -232,7 +230,6 @@ def segmentation(param,
             arr1 = (arr1 > threshold)
             arr1 = np.squeeze(arr1, axis=2).astype(np.uint8)
         else:
-            arr1 = softmax(arr1)
             arr1 = np.argmax(arr1, axis=-1).astype(np.uint8)
         pred_img[row:row + chunk_size, col:col + chunk_size] = arr1
 
