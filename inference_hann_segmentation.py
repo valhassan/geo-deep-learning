@@ -1,5 +1,6 @@
 import itertools
 from math import sqrt
+from scipy.special import softmax
 from typing import List, Union, Sequence
 
 import torch
@@ -26,7 +27,7 @@ from models.model_choice import define_model, read_checkpoint
 from utils import augmentation
 from utils.utils import generate_patch_list
 from utils.utils import get_device_ids, get_key_def, \
-add_metadata_from_raster_to_sample, _window_2D, set_device
+add_metadata_from_raster_to_sample, set_device
 
 # Set the logging file
 logging = get_logger(__name__)
@@ -34,13 +35,10 @@ def _pad(arr, chunk_size):
     """ Pads img_arr """
     w_diff = chunk_size - arr.shape[0]
     h_diff = chunk_size - arr.shape[1]
-    aug = int(round(chunk_size * (1 - 1.0 / 2.0)))
-    aug_w = int(round(chunk_size * (1 - 1.0 / 2.0))) + w_diff
-    aug_h = int(round(chunk_size * (1 - 1.0 / 2.0))) + h_diff
     if len(arr.shape) > 2:
-        padded_arr = np.pad(arr, ((aug, aug_w), (aug, aug_h), (0, 0)), mode="reflect")
+        padded_arr = np.pad(arr, ((0, w_diff), (0, h_diff), (0, 0)), mode="reflect")
     else:
-        padded_arr = np.pad(arr, ((aug, aug_w), (aug, aug_h)), mode="reflect")
+        padded_arr = np.pad(arr, ((0, w_diff), (0, h_diff)), mode="reflect")
 
     return padded_arr
 
@@ -93,12 +91,13 @@ def ras2vec(raster_file, output_path):
     print("Number of features written: {}".format(i))
 
 
-def gen_img_samples(src, patch_list, *band_order):
+def gen_img_samples(src, patch_list, chunk_size, *band_order):
     """
     TODO
     Args:
         src: input image (rasterio object)
         patch_list: list of patches index
+        chunk_size: preset image tile size
         *band_order: ignore
 
     Returns: generator object
@@ -109,16 +108,17 @@ def gen_img_samples(src, patch_list, *band_order):
         window = Window.from_slices(slice(patch_y, patch_y + patch_height),
                                     slice(patch_x, patch_x + patch_width))
         if band_order:
-            patch_array = reshape_as_image(src.read(band_order[0], window=window, boundless=True, fill_value=src.nodata))
+            patch_array = reshape_as_image(src.read(band_order[0], window=window))
         else:
-            patch_array = reshape_as_image(src.read(window=window, boundless=True, fill_value=src.nodata))
+            patch_array = reshape_as_image(src.read(window=window))
+        patch_array = _pad(patch_array, chunk_size)
 
         yield patch_array, (patch_y, patch_height), (patch_x, patch_width), hann_window
 
 def sigmoid(x):
    return 1/(1+np.exp(-x))
-def softmax(x):
-    return np.exp(x - np.max(x)) / np.exp(x - np.max(x)).sum()
+# def softmax(x):
+#     return np.exp(x - np.max(x)) / np.exp(x - np.max(x)).sum()
 
 @torch.no_grad()
 def segmentation(param,
@@ -159,7 +159,8 @@ def segmentation(param,
     h_padded, w_padded = input_image.height + chunk_size, input_image.width + chunk_size
     patch_list = generate_patch_list(w_padded, h_padded, chunk_size, use_hanning)
     pred_img = np.zeros((tf_len, h_padded , w_padded, num_classes), dtype=np.float16)
-    img_gen = gen_img_samples(src=input_image, patch_list=patch_list)
+    img_gen = gen_img_samples(src=input_image, patch_list=patch_list, chunk_size=chunk_size)
+    single_class_mode = False if num_classes > 1 else True
     for patch, h_idxs, w_idxs, hann_win in tqdm(img_gen, position=1, leave=False,
                                                 desc=f'Inferring on patches'):
         hann_win = np.expand_dims(hann_win, -1)
@@ -192,9 +193,14 @@ def segmentation(param,
         outputs = outputs.permute(0, 2, 3, 1).squeeze(dim=0)
         outputs = outputs.cpu().numpy() * hann_win
         pred_img[:, h_idxs[0]:h_idxs[0]+h_idxs[1], w_idxs[0]:w_idxs[0]+w_idxs[1], :] += outputs
-    pred_img = sigmoid(pred_img.mean(axis=0))
-    pred_img = (pred_img > threshold)
-    pred_img = np.squeeze(pred_img, axis=2).astype(np.uint8)
+    pred_img = pred_img.mean(axis=0)
+    if single_class_mode:
+        pred_img = sigmoid(pred_img)
+        pred_img = (pred_img > threshold)
+        pred_img = np.squeeze(pred_img, axis=2).astype(np.uint8)
+    else:
+        pred_img = softmax(pred_img, axis=-1)
+        pred_img = np.argmax(pred_img, axis=-1).astype(np.uint8)
     end_seg = time.time() - start_seg
     logging.info('Segmentation operation completed in {:.0f}m {:.0f}s'.format(end_seg // 60, end_seg % 60))
     if debug:
@@ -329,7 +335,7 @@ def main(params: Union[DictConfig, dict]) -> None:
         Path.mkdir(working_folder / aoi.raster_name.parent.name, parents=True, exist_ok=True)
         inference_image = working_folder / aoi.raster_name.parent.name / f"{aoi.raster_name.stem}_inference.tif"
         temp_file = working_folder / aoi.raster_name.parent.name / f"{aoi.raster_name.stem}.dat"
-        logging.info(f'\nReading image: {aoi.raster_name}')
+        logging.info(f'\nReading image: {aoi.raster_name.stem}')
         inf_meta = aoi.raster.meta
 
         pred = segmentation(param=params,
