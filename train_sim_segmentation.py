@@ -2,6 +2,7 @@ import torch
 import shutil
 import multiprocessing as mp
 from time import time
+from tqdm import tqdm
 from pathlib import Path
 from typing import Sequence
 from datetime import datetime
@@ -83,6 +84,13 @@ def create_dataloader(samples_folder: Path,
                                                              len(samples_weight))
     trn_dataset = datasets[0]
     return trn_dataset, sampler
+def get_factors(x):
+    workers = []
+    for i in range(1, x + 1):
+        if x % i == 0:
+            workers.append(i)
+    return workers
+
 
 def train(cfg: DictConfig) -> None:
     """
@@ -226,10 +234,12 @@ def train(cfg: DictConfig) -> None:
                                              dontcare2backgr=dontcare2backgr,
                                              debug=debug)
     d = {}
-    workers = [x for x in range(2, mp.cpu_count(), 2)]
+    num_cpu_per_task = 64
+    # workers = [x for x in range(2, mp.cpu_count(), 2)]
+    workers = get_factors(num_cpu_per_task)
     logging.info(f'Number of CPUs: {mp.cpu_count()}')
     logging.info(f'List of number of workers to test: {workers}')
-    for num_workers in range(2, mp.cpu_count(), 2):
+    for num_workers in workers:
         trn_dataloader = DataLoader(trn_dataset,
                                     batch_size=batch_size,
                                     num_workers=num_workers,
@@ -238,7 +248,7 @@ def train(cfg: DictConfig) -> None:
                                     pin_memory=True)
         start = time()
         for epoch in range(1, 3):
-            for i, data in enumerate(trn_dataloader, 0):
+            for i, data in enumerate(tqdm(trn_dataloader, desc=f'Iterating train batches')):
                 pass
         end = time()
         end_test = end - start
