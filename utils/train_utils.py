@@ -178,7 +178,9 @@ def create_dataloader(samples_folder: Path,
 
     # https://discuss.pytorch.org/t/guidelines-for-assigning-num-workers-to-dataloader/813/5
     if not debug:
-        num_workers = len(gpu_devices_dict.keys()) * 2 if len(gpu_devices_dict.keys()) > 1 else 4
+        num_workers = 16
+        # num_workers = len(gpu_devices_dict.keys()) * 2 if len(gpu_devices_dict.keys()) > 1 else 4
+
     else:
         num_workers = 0
 
