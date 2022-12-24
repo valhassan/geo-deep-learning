@@ -1,8 +1,9 @@
 # @package _global_
 discriminator:
   _target_: models.discriminator.Discriminator
-  in_channels: 1
+  in_channels: 3
   kernel_size: 3
   n_channels: 64
   n_blocks: 8
   fc_size: 1024
+  c_image: True

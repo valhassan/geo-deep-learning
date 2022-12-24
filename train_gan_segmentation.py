@@ -27,13 +27,11 @@ def training(train_loader,
              criterion,
              optimizer_s,
              optimizer_d,
-             num_classes,
              batch_size,
-             warm_up,
+             metrics_dict,
              device):
     segmentor.train()
     discriminator.train()
-    train_metrics = create_metrics_dict(num_classes)
     # Establish convention for real and fake labels during training
     label_is_real = 0.9
     label_is_fake = 0.0
@@ -41,15 +39,6 @@ def training(train_loader,
                                             desc=f'Iterating train batches with {device.type}')):
         images = data['sat_img'].to(device)
         ground_truth = data['map_img'].to(device).unsqueeze(1).float()
-        if warm_up:
-            segmentor.zero_grad(set_to_none=True)
-            segmentor_output = segmentor(images)
-            loss_segmentor = criterion(segmentor_output, ground_truth)
-            loss_segmentor.backward()
-            optimizer_s.step()
-            train_metrics['segmentor-loss'].update(loss_segmentor.item(), batch_size)
-            return train_metrics
-
         # create real and fake label
         real_label = torch.full((batch_size,), label_is_real, dtype=images.dtype, device=device)
         fake_label = torch.full((batch_size,), label_is_fake, dtype=images.dtype, device=device)
@@ -61,13 +50,13 @@ def training(train_loader,
         discriminator.zero_grad(set_to_none=True)
 
         # train discriminator on ground_truth (real labels)
-        gt_output = discriminator(ground_truth).view(-1)
+        gt_output = discriminator(ground_truth, images).view(-1)
         loss_discriminator_gt = criterion(gt_output, real_label)
         loss_discriminator_gt.backward(retain_graph=True)
 
         # train discriminator on segmentor output (fake labels)
         segmentor_output = segmentor(images)
-        sg_output = discriminator(segmentor_output.detach().clone()).view(-1)
+        sg_output = discriminator(segmentor_output.detach().clone(), images).view(-1)
         loss_discriminator_sg = criterion(sg_output, fake_label)
         loss_discriminator_sg.backward()
 
@@ -82,7 +71,7 @@ def training(train_loader,
         segmentor.zero_grad(set_to_none=True)
 
         loss_segmentor_gt = criterion(segmentor_output, ground_truth)
-        loss_segmentor_sg = 0.001 * criterion(discriminator(segmentor_output).view(-1), real_label)
+        loss_segmentor_sg = 0.001 * criterion(discriminator(segmentor_output, images).view(-1), real_label)
 
         # Total Segmentor loss
         loss_segmentor = loss_segmentor_gt + loss_segmentor_sg
@@ -93,12 +82,12 @@ def training(train_loader,
         real_score = torch.sigmoid_(torch.mean(gt_output.detach()))
         fake_score = torch.sigmoid_(torch.mean(sg_output.detach()))
 
-        train_metrics['real-score-critic'].update(real_score.item(), batch_size)
-        train_metrics['fake-score-critic'].update(fake_score.item(), batch_size)
-        train_metrics['segmentor-loss'].update(loss_segmentor.item(), batch_size)
-        train_metrics['discriminator-loss'].update(loss_discriminator.item(), batch_size)
-    logging.info(f'trn Loss: {train_metrics["segmentor-loss"].avg:.4f}')
-    return train_metrics
+        metrics_dict['real-score-critic'].update(real_score.item(), batch_size)
+        metrics_dict['fake-score-critic'].update(fake_score.item(), batch_size)
+        metrics_dict['segmentor-loss'].update(loss_segmentor.item(), batch_size)
+        metrics_dict['discriminator-loss'].update(loss_discriminator.item(), batch_size)
+    logging.info(f'trn Loss: {metrics_dict["segmentor-loss"].avg:.4f}')
+    return metrics_dict
 
 
 def evaluation(eval_loader,
@@ -344,7 +333,7 @@ def train(cfg: DictConfig) -> None:
     best_loss = 999
     early_stop_count = 0
     last_vis_epoch = 0
-
+    train_metrics = create_metrics_dict(num_classes)
     if warmup:
         half_num_epochs = num_epochs // 2
         if half_num_epochs > 10:
@@ -354,17 +343,16 @@ def train(cfg: DictConfig) -> None:
         for epoch in range(warmup_epochs):
             logging.info(f'\nWarmup Epoch {epoch}/{warmup_epochs - 1}\n'
                          + "-" * len(f'Epoch {epoch}/{warmup_epochs - 1}'))
-            trn_report = training(train_loader=trn_dataloader,
-                                  discriminator=discriminator,
-                                  segmentor=segmentor,
-                                  criterion=criterion,
-                                  optimizer_s=optimizer_s,
-                                  optimizer_d=optimizer_d,
-                                  num_classes=num_classes,
-                                  batch_size=batch_size,
-                                  warm_up=warmup,
-                                  device=device)
-            logging.info(f'trn loss: {trn_report["segmentor-loss"].avg:.4f}')
+            for batch_index, data in enumerate(tqdm(trn_dataloader,desc=f'Iterating train batches with {device.type}')):
+                images = data['sat_img'].to(device)
+                ground_truth = data['map_img'].to(device).unsqueeze(1).float()
+                segmentor.zero_grad(set_to_none=True)
+                segmentor_output = segmentor(images)
+                loss_segmentor = criterion(segmentor_output, ground_truth)
+                loss_segmentor.backward()
+                optimizer_s.step()
+                train_metrics['segmentor-loss'].update(loss_segmentor.item(), batch_size)
+            logging.info(f'trn loss: {train_metrics["segmentor-loss"].avg:.4f}')
     for epoch in range(num_epochs):
         logging.info(f'\nEpoch {epoch}/{num_epochs - 1}\n' + "-" * len(f'Epoch {epoch}/{num_epochs - 1}'))
         trn_report = training(train_loader=trn_dataloader,
@@ -373,10 +361,10 @@ def train(cfg: DictConfig) -> None:
                               criterion=criterion,
                               optimizer_s=optimizer_s,
                               optimizer_d=optimizer_d,
-                              num_classes=num_classes,
                               batch_size=batch_size,
-                              warm_up=False,
+                              metrics_dict=train_metrics,
                               device=device)
+
         val_report = evaluation(eval_loader=val_dataloader,
                                 segmentor=segmentor,
                                 criterion=criterion,
@@ -394,7 +382,7 @@ def train(cfg: DictConfig) -> None:
         d_scheduler.step()
         s_scheduler.step()
         if 'trn_log' in locals():  # only save the value if a tracker is setup
-            trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou', 'loss'])
+            trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou', 'iou-nonbg', 'loss'])
         if 'val_log' in locals():  # only save the value if a tracker is setup
             if batch_metrics is not None:
                 val_log.add_values(val_report, epoch)
