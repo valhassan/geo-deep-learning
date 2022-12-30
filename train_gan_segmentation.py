@@ -27,6 +27,8 @@ def training(train_loader,
              criterion,
              optimizer_s,
              optimizer_d,
+             scheduler_s,
+             scheduler_d,
              batch_size,
              metrics_dict,
              device):
@@ -77,6 +79,9 @@ def training(train_loader,
         loss_segmentor = loss_segmentor_gt + loss_segmentor_sg
         loss_segmentor.backward()
         optimizer_s.step()
+
+        scheduler_s.step()
+        scheduler_d.step()
 
         # Discriminator Output Probabilities (Real | Fake)
         real_score = torch.sigmoid_(torch.mean(gt_output.detach()))
@@ -316,18 +321,20 @@ def train(cfg: DictConfig) -> None:
                                                                        cfg=cfg,
                                                                        dontcare2backgr=dontcare2backgr,
                                                                        debug=debug)
-    # lr_steps_per_epoch = len(trn_dataloader)
-    lr_step_size = num_epochs // 4
+    lr_steps_per_epoch = len(trn_dataloader) // batch_size
+    # lr_step_size = num_epochs // 4
     criterion = define_loss(loss_params=cfg.loss, class_weights=class_weights)
     criterion = criterion.to(device)
     optimizer_s = instantiate(cfg.optimizer, params=segmentor.parameters())
     optimizer_d = instantiate(cfg.optimizer, params=discriminator.parameters())
-    # s_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_s, max_lr=0.1,
-    #                                             steps_per_epoch=lr_steps_per_epoch, epochs=num_epochs)
-    # d_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_d, max_lr=0.1,
-    #                                             steps_per_epoch=lr_steps_per_epoch, epochs=num_epochs)
-    s_scheduler = optim.lr_scheduler.StepLR(optimizer_s, step_size=lr_step_size, gamma=0.1)
-    d_scheduler = optim.lr_scheduler.StepLR(optimizer_d, step_size=lr_step_size, gamma=0.1)
+    s_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_s, max_lr=0.01,
+                                                steps_per_epoch=lr_steps_per_epoch,
+                                                epochs=num_epochs+2 if num_epochs == 0 else num_epochs)
+    d_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_d, max_lr=0.01,
+                                                steps_per_epoch=lr_steps_per_epoch,
+                                                epochs=num_epochs+2 if num_epochs == 0 else num_epochs)
+    # s_scheduler = optim.lr_scheduler.StepLR(optimizer_s, step_size=lr_step_size, gamma=0.1)
+    # d_scheduler = optim.lr_scheduler.StepLR(optimizer_d, step_size=lr_step_size, gamma=0.1)
 
     since = time.time()
     best_loss = 999
@@ -361,6 +368,8 @@ def train(cfg: DictConfig) -> None:
                               criterion=criterion,
                               optimizer_s=optimizer_s,
                               optimizer_d=optimizer_d,
+                              scheduler_s=s_scheduler,
+                              scheduler_d=d_scheduler,
                               batch_size=batch_size,
                               metrics_dict=train_metrics,
                               device=device)
