@@ -398,8 +398,8 @@ def train(cfg: DictConfig) -> None:
                                 dataset='val',
                                 debug=debug,
                                 dontcare=dontcare_val)
-        d_scheduler.step()
-        s_scheduler.step()
+        # d_scheduler.step()
+        # s_scheduler.step()
         if 'trn_log' in locals():  # only save the value if a tracker is setup
             trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou', 'iou-nonbg', 'loss'])
         if 'val_log' in locals():  # only save the value if a tracker is setup
