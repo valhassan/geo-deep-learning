@@ -332,7 +332,8 @@ def train(cfg: DictConfig) -> None:
         warmup_epochs = half_num_epochs
     total_num_epochs = num_epochs + warmup_epochs
     total_num_epochs = total_num_epochs + 2 if total_num_epochs == 0 else total_num_epochs
-    lr_steps_per_epoch = math.ceil(len(trn_dataloader) / batch_size)
+    lr_steps_per_epoch =  len(trn_dataloader)
+    # lr_steps_per_epoch = math.ceil(len(trn_dataloader) / batch_size)
     # lr_step_size = num_epochs // 4
     criterion_g = define_loss(loss_params=cfg.loss, class_weights=class_weights)
     criterion_g = criterion_g.to(device)
