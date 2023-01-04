@@ -158,7 +158,8 @@ def segmentation(param,
     tf_len = len(transforms)
     h_padded, w_padded = input_image.height + chunk_size, input_image.width + chunk_size
     patch_list = generate_patch_list(w_padded, h_padded, chunk_size, use_hanning)
-    pred_img = np.zeros((tf_len, h_padded , w_padded, num_classes), dtype=np.float16)
+    # pred_img = np.zeros((tf_len, h_padded , w_padded, num_classes), dtype=np.float16)
+    fp = np.memmap(tp_mem, dtype='float16', mode='w+', shape=(tf_len, h_padded, w_padded, num_classes))
     img_gen = gen_img_samples(src=input_image, patch_list=patch_list, chunk_size=chunk_size)
     single_class_mode = False if num_classes > 1 else True
     for patch, h_idxs, w_idxs, hann_win in tqdm(img_gen, position=1, leave=False,
@@ -192,15 +193,23 @@ def segmentation(param,
         outputs = torch.stack(output_lst)
         outputs = outputs.permute(0, 2, 3, 1).squeeze(dim=0)
         outputs = outputs.cpu().numpy() * hann_win
-        pred_img[:, h_idxs[0]:h_idxs[0]+h_idxs[1], w_idxs[0]:w_idxs[0]+w_idxs[1], :] += outputs
-    pred_img = pred_img.mean(axis=0)
-    if single_class_mode:
-        pred_img = sigmoid(pred_img)
-        pred_img = (pred_img > threshold)
-        pred_img = np.squeeze(pred_img, axis=2).astype(np.uint8)
-    else:
-        pred_img = softmax(pred_img, axis=-1)
-        pred_img = np.argmax(pred_img, axis=-1).astype(np.uint8)
+        # pred_img[:, h_idxs[0]:h_idxs[0]+h_idxs[1], w_idxs[0]:w_idxs[0]+w_idxs[1], :] += outputs
+        fp[:, h_idxs[0]:h_idxs[0]+h_idxs[1], w_idxs[0]:w_idxs[0]+w_idxs[1], :] += outputs
+    fp.flush()
+    del fp
+    fp = np.memmap(tp_mem, dtype='float16', mode='r', shape=(tf_len, h_padded, w_padded, num_classes))
+    pred_img = np.zeros((h_padded, w_padded), dtype=np.uint8)
+    for row, col in tqdm(itertools.product(range(0, h_padded, chunk_size),
+                                           range(0, w_padded, chunk_size)),leave=False, desc="Writing to array"):
+        arr1 = (fp[:, row:row + chunk_size, col:col + chunk_size, :]).mean(axis=0)
+        if single_class_mode:
+            arr1 = sigmoid(arr1)
+            arr1 = (arr1 > threshold)
+            arr1 = np.squeeze(arr1, axis=2).astype(np.uint8)
+        else:
+            arr1 = softmax(arr1, axis=-1)
+            arr1 = np.argmax(arr1, axis=-1).astype(np.uint8)
+        pred_img[row:row + chunk_size, col:col + chunk_size] = arr1
     end_seg = time.time() - start_seg
     logging.info('Segmentation operation completed in {:.0f}m {:.0f}s'.format(end_seg // 60, end_seg % 60))
     if debug:
