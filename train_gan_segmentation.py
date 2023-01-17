@@ -55,7 +55,7 @@ def training(train_loader,
         segmentor_output = segmentor(images)
         d_sg_output = discriminator(segmentor_output, images.detach().clone())
 
-        # Discriminator loss
+        # Discriminator
         loss_discriminator = - criterion_d(d_sg_output, d_gt_output)
         loss_discriminator.backward()
         optimizer_d.step()
@@ -336,7 +336,7 @@ def train(cfg: DictConfig) -> None:
     criterion_g = define_loss(loss_params=cfg.loss, class_weights=class_weights)
     criterion_g = criterion_g.to(device)
     # criterion_d = torch.nn.BCEWithLogitsLoss()
-    criterion_d = MS_SSIM(n_channels=1)
+    criterion_d = MS_SSIM(n_channels=1, window_size=8)
     criterion_d = criterion_d.to(device)
     optimizer_s = instantiate(cfg.optimizer, params=segmentor.parameters())
     optimizer_d = instantiate(cfg.optimizer, params=discriminator.parameters())
