@@ -10,6 +10,8 @@ from datetime import datetime
 from omegaconf import DictConfig
 from collections import OrderedDict
 from utils.loss import define_loss
+from piqa import MS_SSIM
+from torch.nn import functional
 from utils.logger import get_logger, InformationLogger, set_tracker
 from models.model_choice import define_model, read_checkpoint, adapt_checkpoint_to_dp_model
 from utils.metrics import report_classification, create_metrics_dict, iou
@@ -37,46 +39,41 @@ def training(train_loader,
     segmentor.train()
     discriminator.train()
     # Establish convention for real and fake labels during training
-    label_is_real = 0.9
-    label_is_fake = 0.0
+    # label_is_real = 0.9
+    # label_is_fake = 0.0
     for batch_index, data in enumerate(tqdm(train_loader,
                                             desc=f'Iterating train batches with {device.type}')):
         images = data['sat_img'].to(device)
         ground_truth = data['map_img'].to(device).unsqueeze(1).float()
-        # create real and fake label
-        real_label = torch.full((batch_size,), label_is_real, dtype=images.dtype, device=device)
-        fake_label = torch.full((batch_size,), label_is_fake, dtype=images.dtype, device=device)
-
-        # Train Discriminator
-        for d_parameters in discriminator.parameters():
-            d_parameters.requires_grad = True
 
         discriminator.zero_grad(set_to_none=True)
 
         # train discriminator on ground_truth (real labels)
-        gt_output = discriminator(ground_truth, images).view(-1)
-
-        loss_discriminator_gt = criterion_d(gt_output, real_label)
-        loss_discriminator_gt.backward(retain_graph=True)
+        d_gt_output = discriminator(ground_truth, images.detach().clone())
 
         # train discriminator on segmentor output (fake labels)
         segmentor_output = segmentor(images)
-        sg_output = discriminator(segmentor_output.detach().clone(), images).view(-1)
-        loss_discriminator_sg = criterion_d(sg_output, fake_label)
-        loss_discriminator_sg.backward()
+        d_sg_output = discriminator(segmentor_output, images.detach().clone())
 
-        # Total Discriminator loss
-        loss_discriminator = loss_discriminator_gt + loss_discriminator_sg
+        # Discriminator loss
+        loss_discriminator = - criterion_d(d_sg_output, d_gt_output)
+        loss_discriminator.backward()
         optimizer_d.step()
 
-        # Train Generator
-        for d_parameters in discriminator.parameters():
-            d_parameters.requires_grad = False
-
+        # Train Segmentor
         segmentor.zero_grad(set_to_none=True)
+        segmentor_output = segmentor(images)
 
+        # Segmentor loss
         loss_segmentor_gt = criterion_g(segmentor_output, ground_truth)
-        loss_segmentor_sg = 0.01 * criterion_d(discriminator(segmentor_output, images).view(-1), real_label)
+
+        # train discriminator on segmentor output (fake labels)
+        g_sg_output = discriminator(segmentor_output, images.detach().clone())
+
+        # train discriminator on ground_truth (real labels)
+        g_gt_output = discriminator(ground_truth, images.detach().clone())
+
+        loss_segmentor_sg = 1 - criterion_d(g_sg_output, g_gt_output)
 
         # Total Segmentor loss
         loss_segmentor = loss_segmentor_gt + loss_segmentor_sg
@@ -87,14 +84,15 @@ def training(train_loader,
         scheduler_d.step()
 
         # Discriminator Output Probabilities (Real | Fake)
-        real_score = torch.sigmoid_(torch.mean(gt_output.detach()))
-        fake_score = torch.sigmoid_(torch.mean(sg_output.detach()))
+        # real_score = torch.sigmoid_(torch.mean(d_gt_output.detach()))
+        # fake_score = torch.sigmoid_(torch.mean(d_sg_output.detach()))
 
-        metrics_dict['real-score-critic'].update(real_score.item(), batch_size)
-        metrics_dict['fake-score-critic'].update(fake_score.item(), batch_size)
+        # metrics_dict['real-score-critic'].update(real_score.item(), batch_size)
+        # metrics_dict['fake-score-critic'].update(fake_score.item(), batch_size)
         metrics_dict['segmentor-loss'].update(loss_segmentor.item(), batch_size)
         metrics_dict['discriminator-loss'].update(loss_discriminator.item(), batch_size)
     logging.info(f'trn Loss: {metrics_dict["segmentor-loss"].avg:.4f}')
+    logging.info(f'loss discriminator: {metrics_dict["discriminator-loss"].avg:.4f}')
     return metrics_dict
 
 
@@ -337,7 +335,8 @@ def train(cfg: DictConfig) -> None:
     # lr_step_size = num_epochs // 4
     criterion_g = define_loss(loss_params=cfg.loss, class_weights=class_weights)
     criterion_g = criterion_g.to(device)
-    criterion_d = torch.nn.BCEWithLogitsLoss()
+    # criterion_d = torch.nn.BCEWithLogitsLoss()
+    criterion_d = MS_SSIM(n_channels=1)
     criterion_d = criterion_d.to(device)
     optimizer_s = instantiate(cfg.optimizer, params=segmentor.parameters())
     optimizer_d = instantiate(cfg.optimizer, params=discriminator.parameters())
@@ -402,7 +401,8 @@ def train(cfg: DictConfig) -> None:
         # d_scheduler.step()
         # s_scheduler.step()
         if 'trn_log' in locals():  # only save the value if a tracker is setup
-            trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou', 'iou-nonbg', 'loss'])
+            trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou', 'iou-nonbg', 'loss',
+                                                          'real-score-critic', 'fake-score-critic'])
         if 'val_log' in locals():  # only save the value if a tracker is setup
             if batch_metrics is not None:
                 val_log.add_values(val_report, epoch)
