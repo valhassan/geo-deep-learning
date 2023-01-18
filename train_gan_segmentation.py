@@ -56,7 +56,8 @@ def training(train_loader,
         d_sg_output = discriminator(segmentor_output, images.detach().clone())
 
         # Discriminator
-        loss_discriminator = - criterion_d(d_sg_output, d_gt_output)
+        # loss_discriminator = - criterion_d(d_sg_output, d_gt_output)
+        loss_discriminator = - torch.mean(torch.abs(d_sg_output - d_gt_output))
         loss_discriminator.backward()
         optimizer_d.step()
 
@@ -73,7 +74,8 @@ def training(train_loader,
         # train discriminator on ground_truth (real labels)
         g_gt_output = discriminator(ground_truth, images.detach().clone())
 
-        loss_segmentor_sg = 1 - criterion_d(g_sg_output, g_gt_output)
+        # loss_segmentor_sg = 1 - criterion_d(g_sg_output, g_gt_output)
+        loss_segmentor_sg = - torch.mean(torch.abs(g_sg_output - g_gt_output))
 
         # Total Segmentor loss
         loss_segmentor = loss_segmentor_gt + loss_segmentor_sg
