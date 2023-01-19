@@ -11,7 +11,7 @@ from omegaconf import DictConfig
 from collections import OrderedDict
 from utils.loss import define_loss
 from piqa import MS_SSIM
-from torch.nn import functional
+import torch.nn.functional as F
 from utils.logger import get_logger, InformationLogger, set_tracker
 from models.model_choice import define_model, read_checkpoint, adapt_checkpoint_to_dp_model
 from utils.metrics import report_classification, create_metrics_dict, iou
@@ -46,14 +46,14 @@ def training(train_loader,
         images = data['sat_img'].to(device)
         ground_truth = data['map_img'].to(device).unsqueeze(1).float()
 
-        discriminator.zero_grad(set_to_none=True)
-
-        # train discriminator on ground_truth (real labels)
-        d_gt_output = discriminator(ground_truth, images.detach().clone())
-
+        # discriminator.zero_grad(set_to_none=True)
         # train discriminator on segmentor output (fake labels)
         segmentor_output = segmentor(images)
-        d_sg_output = discriminator(segmentor_output, images.detach().clone())
+        segmentor_output = F.sigmoid(segmentor_output)
+        segmentor_output = segmentor_output.detach()
+        d_sg_output = discriminator(segmentor_output, images.clone())
+        # train discriminator on ground_truth (real labels)
+        d_gt_output = discriminator(ground_truth, images.clone())
 
         # Discriminator
         # loss_discriminator = - criterion_d(d_sg_output, d_gt_output)
@@ -61,24 +61,29 @@ def training(train_loader,
         loss_discriminator.backward()
         optimizer_d.step()
 
+        # clip parameters in D
+        for p in discriminator.parameters():
+            p.data.clamp_(-0.05, 0.05)
+
         # Train Segmentor
         segmentor.zero_grad(set_to_none=True)
         segmentor_output = segmentor(images)
+        segmentor_output = F.sigmoid(segmentor_output)
+
+        # train discriminator on segmentor output (fake labels)
+        g_sg_output = discriminator(segmentor_output, images.clone())
+
+        # train discriminator on ground_truth (real labels)
+        g_gt_output = discriminator(ground_truth, images.clone())
 
         # Segmentor loss
         loss_segmentor_gt = criterion_g(segmentor_output, ground_truth)
 
-        # train discriminator on segmentor output (fake labels)
-        g_sg_output = discriminator(segmentor_output, images.detach().clone())
-
-        # train discriminator on ground_truth (real labels)
-        g_gt_output = discriminator(ground_truth, images.detach().clone())
-
         # loss_segmentor_sg = 1 - criterion_d(g_sg_output, g_gt_output)
-        loss_segmentor_sg = - torch.mean(torch.abs(g_sg_output - g_gt_output))
+        loss_segmentor_sg = torch.mean(torch.abs(g_sg_output - g_gt_output))
 
         # Total Segmentor loss
-        loss_segmentor = loss_segmentor_gt + loss_segmentor_sg
+        loss_segmentor = loss_segmentor_gt + 0.1 * loss_segmentor_sg
         loss_segmentor.backward()
         optimizer_s.step()
 
