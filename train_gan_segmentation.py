@@ -49,9 +49,9 @@ def training(train_loader,
         # discriminator.zero_grad(set_to_none=True)
         # train discriminator on segmentor output (fake labels)
         segmentor_output = segmentor(images)
-        segmentor_output = F.sigmoid(segmentor_output)
-        segmentor_output = segmentor_output.detach()
-        d_sg_output = discriminator(segmentor_output, images.clone())
+        segmentor_output_ = F.sigmoid(segmentor_output)
+        segmentor_output_ = segmentor_output_.detach()
+        d_sg_output = discriminator(segmentor_output_, images.clone())
         # train discriminator on ground_truth (real labels)
         d_gt_output = discriminator(ground_truth, images.clone())
 
@@ -68,10 +68,10 @@ def training(train_loader,
         # Train Segmentor
         segmentor.zero_grad(set_to_none=True)
         segmentor_output = segmentor(images)
-        segmentor_output = F.sigmoid(segmentor_output)
+        segmentor_output_ = F.sigmoid(segmentor_output)
 
         # train discriminator on segmentor output (fake labels)
-        g_sg_output = discriminator(segmentor_output, images.clone())
+        g_sg_output = discriminator(segmentor_output_, images.clone())
 
         # train discriminator on ground_truth (real labels)
         g_gt_output = discriminator(ground_truth, images.clone())
@@ -83,12 +83,12 @@ def training(train_loader,
         loss_segmentor_sg = torch.mean(torch.abs(g_sg_output - g_gt_output))
 
         # Total Segmentor loss
-        loss_segmentor = loss_segmentor_gt + 0.1 * loss_segmentor_sg
+        loss_segmentor = loss_segmentor_gt + loss_segmentor_sg
         loss_segmentor.backward()
         optimizer_s.step()
 
-        scheduler_s.step()
-        scheduler_d.step()
+        # scheduler_s.step()
+        # scheduler_d.step()
 
         # Discriminator Output Probabilities (Real | Fake)
         # real_score = torch.sigmoid_(torch.mean(d_gt_output.detach()))
@@ -105,6 +105,7 @@ def training(train_loader,
 
 def evaluation(eval_loader,
                segmentor,
+               discriminator,
                criterion,
                num_classes,
                batch_size,
@@ -120,6 +121,7 @@ def evaluation(eval_loader,
                ):
     single_class_mode = True if num_classes == 1 else False
     segmentor.eval()
+    discriminator.eval()
     eval_metrics = create_metrics_dict(num_classes=num_classes)
 
     with torch.no_grad():
@@ -146,7 +148,18 @@ def evaluation(eval_loader,
                                    ep_num=ep_idx + 1,
                                    scale=scale,
                                    device=device)
-            loss = criterion(outputs, labels) if num_classes > 1 else criterion(outputs, labels.unsqueeze(1).float())
+            output_ = F.sigmoid(outputs)
+            output_ = output_.detach()
+
+            # train discriminator on segmentor output (fake labels)
+            g_sg_output = discriminator(output_, inputs.clone())
+
+            # train discriminator on ground_truth (real labels)
+            g_gt_output = discriminator(labels.unsqueeze(1), inputs.clone())
+
+            loss_segmentor = criterion(outputs, labels) if num_classes > 1 else criterion(outputs, labels.unsqueeze(1).float())
+            loss_discriminator = torch.mean(torch.abs(g_sg_output - g_gt_output))
+            loss = loss_segmentor + loss_discriminator
             eval_metrics['loss'].update(loss.item(), batch_size)
             if single_class_mode:
                 outputs = torch.sigmoid(outputs)
@@ -337,9 +350,9 @@ def train(cfg: DictConfig) -> None:
         warmup_epochs = half_num_epochs
     total_num_epochs = num_epochs + warmup_epochs
     total_num_epochs = total_num_epochs + 2 if total_num_epochs == 0 else total_num_epochs
-    lr_steps_per_epoch =  len(trn_dataloader)
+    # lr_steps_per_epoch =  len(trn_dataloader)
     # lr_steps_per_epoch = math.ceil(len(trn_dataloader) / batch_size)
-    # lr_step_size = num_epochs // 4
+    lr_step_size = num_epochs // 4
     criterion_g = define_loss(loss_params=cfg.loss, class_weights=class_weights)
     criterion_g = criterion_g.to(device)
     # criterion_d = torch.nn.BCEWithLogitsLoss()
@@ -347,14 +360,14 @@ def train(cfg: DictConfig) -> None:
     criterion_d = criterion_d.to(device)
     optimizer_s = instantiate(cfg.optimizer, params=segmentor.parameters())
     optimizer_d = instantiate(cfg.optimizer, params=discriminator.parameters())
-    s_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_s, max_lr=0.01,
-                                                steps_per_epoch=lr_steps_per_epoch,
-                                                epochs=total_num_epochs)
-    d_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_d, max_lr=0.01,
-                                                steps_per_epoch=lr_steps_per_epoch,
-                                                epochs=total_num_epochs)
-    # s_scheduler = optim.lr_scheduler.StepLR(optimizer_s, step_size=lr_step_size, gamma=0.1)
-    # d_scheduler = optim.lr_scheduler.StepLR(optimizer_d, step_size=lr_step_size, gamma=0.1)
+    # s_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_s, max_lr=0.01,
+    #                                             steps_per_epoch=lr_steps_per_epoch,
+    #                                             epochs=total_num_epochs)
+    # d_scheduler = optim.lr_scheduler.OneCycleLR(optimizer_d, max_lr=0.01,
+    #                                             steps_per_epoch=lr_steps_per_epoch,
+    #                                             epochs=total_num_epochs)
+    s_scheduler = optim.lr_scheduler.StepLR(optimizer_s, step_size=lr_step_size, gamma=0.1)
+    d_scheduler = optim.lr_scheduler.StepLR(optimizer_d, step_size=lr_step_size, gamma=0.1)
 
     since = time.time()
     best_loss = 999
@@ -393,6 +406,7 @@ def train(cfg: DictConfig) -> None:
 
         val_report = evaluation(eval_loader=val_dataloader,
                                 segmentor=segmentor,
+                                discriminator=discriminator,
                                 criterion=criterion_g,
                                 num_classes=num_classes,
                                 batch_size=batch_size,
@@ -405,8 +419,8 @@ def train(cfg: DictConfig) -> None:
                                 dataset='val',
                                 debug=debug,
                                 dontcare=dontcare_val)
-        # d_scheduler.step()
-        # s_scheduler.step()
+        d_scheduler.step()
+        s_scheduler.step()
         if 'trn_log' in locals():  # only save the value if a tracker is setup
             trn_log.add_values(trn_report, epoch, ignore=['precision', 'recall', 'fscore', 'iou', 'iou-nonbg', 'loss',
                                                           'real-score-critic', 'fake-score-critic'])
@@ -481,6 +495,7 @@ def train(cfg: DictConfig) -> None:
     if tst_dataloader:
         tst_report = evaluation(eval_loader=tst_dataloader,
                                 segmentor=segmentor,
+                                discriminator=discriminator,
                                 criterion=criterion_g,
                                 num_classes=num_classes,
                                 batch_size=batch_size,
