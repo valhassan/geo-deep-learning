@@ -102,11 +102,9 @@ def training(train_loader,
                                       bs=batch_size,
                                       out_vals=np.unique(outputs[0].argmax(dim=0).detach().cpu().numpy()),
                                       gt_vals=np.unique(labels[0].detach().cpu().numpy())))
-
         loss.backward()
         optimizer.step()
-
-    scheduler.step()
+        scheduler.step()
     # if train_metrics["loss"].avg is not None:
     #     logging.info(f'Training Loss: {train_metrics["loss"].avg:.4f}')
     return train_metrics
