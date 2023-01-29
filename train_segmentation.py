@@ -105,8 +105,7 @@ def training(train_loader,
         loss.backward()
         optimizer.step()
         scheduler.step()
-    # if train_metrics["loss"].avg is not None:
-    #     logging.info(f'Training Loss: {train_metrics["loss"].avg:.4f}')
+    logging.info(f'trn Loss: {train_metrics["loss"].avg:.4f}')
     return train_metrics
 
 
@@ -270,7 +269,7 @@ def train(cfg: DictConfig) -> None:
     pretrained = get_key_def('pretrained', cfg['model'], default=True, expected_type=(bool, str))
     train_state_dict_path = get_key_def('state_dict_path', cfg['training'], default=None, expected_type=str)
     state_dict_strict = get_key_def('state_dict_strict_load', cfg['training'], default=True, expected_type=bool)
-    dropout_prob = get_key_def('factor', cfg['scheduler']['params'], default=None, expected_type=float)
+    dropout_prob = 0.1
     # if error
     if train_state_dict_path and not Path(train_state_dict_path).is_file():
         raise logging.critical(
@@ -280,8 +279,6 @@ def train(cfg: DictConfig) -> None:
         verify_weights(num_classes, class_weights)
     # Read the concatenation point if requested model is deeplabv3 dualhead
     conc_point = get_key_def('conc_point', cfg['model'], None)
-    step_size = get_key_def('step_size', cfg['scheduler']['params'], default=4, expected_type=int)
-    gamma = get_key_def('gamma', cfg['scheduler']['params'], default=0.9, expected_type=float)
 
     # GPU PARAMETERS
     num_devices = get_key_def('num_gpus', cfg['training'], default=0)
@@ -382,13 +379,13 @@ def train(cfg: DictConfig) -> None:
                                                                        cfg=cfg,
                                                                        dontcare2backgr=dontcare2backgr,
                                                                        debug=debug)
-    lr_steps_per_epoch = len(trn_dataloader)
+    max_iters = num_epochs * len(trn_dataloader)
     criterion = define_loss(loss_params=cfg.loss, class_weights=class_weights)
     criterion = criterion.to(device)
     optimizer = instantiate(cfg.optimizer, params=model.parameters())
-    # lr_scheduler = optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=step_size, gamma=gamma)
-    lr_scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.01, steps_per_epoch=lr_steps_per_epoch,
-                                                 epochs=num_epochs+2 if num_epochs == 0 else num_epochs)
+    if cfg.scheduler._target_ == 'torch.optim.lr_scheduler.OneCycleLR':
+        cfg.scheduler['total_steps'] = max_iters
+    lr_scheduler = instantiate(cfg.scheduler, optimizer=optimizer)
 
     # Save tracking
     set_tracker(mode='train', type='mlflow', task='segmentation', experiment_name=experiment_name, run_name=run_name,
