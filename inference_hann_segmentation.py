@@ -159,7 +159,6 @@ def segmentation(param,
     h_padded, w_padded = input_image.height + chunk_size, input_image.width + chunk_size
     patch_list = generate_patch_list(w_padded, h_padded, chunk_size, use_hanning)
     # pred_img = np.zeros((tf_len, h_padded , w_padded, num_classes), dtype=np.float16)
-    npy_save = tp_mem.parent / f"{tp_mem.stem}.npy"
 
     fp = np.memmap(tp_mem, dtype='float16', mode='w+', shape=(tf_len, h_padded, w_padded, num_classes))
     img_gen = gen_img_samples(src=input_image, patch_list=patch_list, chunk_size=chunk_size)
@@ -206,7 +205,6 @@ def segmentation(param,
         arr1 = (fp[:, row:row + chunk_size, col:col + chunk_size, :]).mean(axis=0)
         if single_class_mode:
             arr1 = sigmoid(arr1)
-            np.save(npy_save, arr1) # TODO: Remove asap, used for testing/debugging
             arr1 = (arr1 > threshold)
             arr1 = np.squeeze(arr1, axis=2).astype(np.uint8)
         else:
