@@ -24,7 +24,6 @@ def training(train_loader,
           model,
           criterion,
           optimizer,
-          scheduler,
           num_classes,
           batch_size,
           ep_idx,
@@ -104,7 +103,7 @@ def training(train_loader,
                                       gt_vals=np.unique(labels[0].detach().cpu().numpy())))
         loss.backward()
         optimizer.step()
-        scheduler.step()
+        # scheduler.step()
     logging.info(f'trn Loss: {train_metrics["loss"].avg:.4f}')
     return train_metrics
 
@@ -385,7 +384,7 @@ def train(cfg: DictConfig) -> None:
     optimizer = instantiate(cfg.optimizer, params=model.parameters())
     if cfg.scheduler._target_ == 'torch.optim.lr_scheduler.OneCycleLR':
         cfg.scheduler['total_steps'] = max_iters
-    lr_scheduler = instantiate(cfg.scheduler, optimizer=optimizer)
+    # lr_scheduler = instantiate(cfg.scheduler, optimizer=optimizer)
 
     # Save tracking
     set_tracker(mode='train', type='mlflow', task='segmentation', experiment_name=experiment_name, run_name=run_name,
@@ -434,7 +433,6 @@ def train(cfg: DictConfig) -> None:
                               model=model,
                               criterion=criterion,
                               optimizer=optimizer,
-                              scheduler=lr_scheduler,
                               num_classes=num_classes,
                               batch_size=batch_size,
                               ep_idx=epoch,
