@@ -697,6 +697,7 @@ def aois_from_csv(
                  f'\tNumber of rows: {len(data_list)}\n'
                  f'\tCopying first row:\n{data_list[0]}\n')
     for i, aoi_dict in tqdm(enumerate(data_list), desc="Creating AOI's"):
+        logging.info(f"{aoi_dict}")
         try:
             new_aoi = AOI.from_dict(
                 aoi_dict=aoi_dict,
