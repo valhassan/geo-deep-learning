@@ -2,6 +2,7 @@
 training:
   num_gpus: 1
   batch_size: 2
+  num_samples: {'trn':0, 'val':0, 'tst':0}
   eval_batch_size:
   batch_metrics:
   lr: 0.0001
