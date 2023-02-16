@@ -17,6 +17,7 @@ def create_metrics_dict(num_classes, ignore_index=None):
                     'fscore': AverageMeter(),
                     'iou': AverageMeter(),
                     'loss': AverageMeter(),
+                    'lr': AverageMeter(),
                     'segmentor-loss': AverageMeter(),
                     'discriminator-loss': AverageMeter(),
                     'real-score-critic': AverageMeter(),
