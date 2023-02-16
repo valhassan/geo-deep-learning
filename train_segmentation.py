@@ -21,18 +21,18 @@ from utils.visualization import vis_from_batch, vis_from_dataloader
 logging = get_logger(__name__)  # import logging
 
 def training(train_loader,
-          model,
-          criterion,
-          optimizer,
-          num_classes,
-          batch_size,
-          ep_idx,
-          progress_log,
-          device,
-          scale,
-          vis_params,
-          debug=False
-          ):
+             model,
+             criterion,
+             optimizer,
+             num_classes,
+             batch_size,
+             ep_idx,
+             progress_log,
+             device,
+             scale,
+             vis_params,
+             debug=False
+             ):
     """
     Train the model and return the metrics of the training epoch
 
@@ -104,6 +104,7 @@ def training(train_loader,
         loss.backward()
         optimizer.step()
         # scheduler.step()
+    train_metrics['lr'].update(optimizer.param_groups[0]['lr'])
     logging.info(f'trn Loss: {train_metrics["loss"].avg:.4f}')
     return train_metrics
 
@@ -378,6 +379,9 @@ def train(cfg: DictConfig) -> None:
                                                                        cfg=cfg,
                                                                        dontcare2backgr=dontcare2backgr,
                                                                        debug=debug)
+    cfg.training['num_samples']['trn'] = len(trn_dataloader)
+    cfg.training['num_samples']['val'] = len(val_dataloader)
+    cfg.training['num_samples']['tst'] = len(tst_dataloader)
     max_iters = num_epochs * len(trn_dataloader)
     criterion = define_loss(loss_params=cfg.loss, class_weights=class_weights)
     criterion = criterion.to(device)
@@ -389,7 +393,7 @@ def train(cfg: DictConfig) -> None:
     # Save tracking
     set_tracker(mode='train', type='mlflow', task='segmentation', experiment_name=experiment_name, run_name=run_name,
                 tracker_uri=tracker_uri, params=cfg,
-                keys2log=['general', 'training', 'dataset', 'model', 'optimizer', 'scheduler', 'augmentation'])
+                keys2log=['training', 'tiling', 'dataset', 'model', 'loss', 'optimizer', 'scheduler', 'augmentation'])
     trn_log, val_log, tst_log = [InformationLogger(dataset) for dataset in ['trn', 'val', 'tst']]
 
     since = time.time()
@@ -466,7 +470,7 @@ def train(cfg: DictConfig) -> None:
                 val_log.add_values(val_report, epoch)
             else:
                 val_log.add_values(val_report, epoch, ignore=['precision', 'recall',
-                                                              'fscore', 'iou', 'iou-nonbg',
+                                                              'fscore', 'lr', 'iou', 'iou-nonbg',
                                                               'segmentor-loss', 'discriminator-loss',
                                                               'real-score-critic', 'fake-score-critic'])
 
