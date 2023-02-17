@@ -85,9 +85,7 @@ def training(train_loader,
                                ep_num=ep_idx + 1,
                                scale=scale,
                                device=device)
-
-        loss = criterion(outputs, labels) if num_classes > 1 else criterion(outputs, labels.unsqueeze(1).float())
-
+        loss = criterion(outputs, labels)
         train_metrics['loss'].update(loss.item(), batch_size)
 
         if device.type == 'cuda' and debug:
@@ -172,7 +170,7 @@ def evaluation(eval_loader,
                                    ep_num=ep_idx + 1,
                                    scale=scale,
                                    device=device)
-            loss = criterion(outputs, labels) if num_classes > 1 else criterion(outputs, labels.unsqueeze(1).float())
+            loss = criterion(outputs, labels)
             eval_metrics['loss'].update(loss.item(), batch_size)
             if single_class_mode:
                 outputs = torch.sigmoid(outputs)
@@ -201,9 +199,10 @@ def evaluation(eval_loader,
     if eval_metrics['loss'].avg:
         logging.info(f"\n{dataset} Loss: {eval_metrics['loss'].avg:.4f}")
     if batch_metrics is not None or dataset == 'tst':
+        if single_class_mode:
+            logging.info(f"\n{dataset} iou_0: {eval_metrics['iou_0'].avg:.4f}")
+            logging.info(f"\n{dataset} iou_1: {eval_metrics['iou_1'].avg:.4f}")
         logging.info(f"\n{dataset} iou: {eval_metrics['iou'].avg:.4f}")
-        logging.info(f"\n{dataset} iou_0: {eval_metrics['iou_0'].avg:.4f}")
-        logging.info(f"\n{dataset} iou_1: {eval_metrics['iou_1'].avg:.4f}")
 
     return eval_metrics
 
@@ -539,7 +538,7 @@ def train(cfg: DictConfig) -> None:
                                 device=device,
                                 dontcare=dontcare_val)
         if 'tst_log' in locals():  # only save the value if a tracker is set up
-            tst_log.add_values(tst_report, num_epochs,ignore=['precision','recall', 'iou-nonbg',
+            tst_log.add_values(tst_report, num_epochs,ignore=['precision', 'iou-nonbg', 'recall', 'lr',
                                                               'fscore','segmentor-loss','discriminator-loss',
                                                               'real-score-critic', 'fake-score-critic'])
 

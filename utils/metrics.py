@@ -117,7 +117,7 @@ def iou(pred, label, batch_size, num_classes, metric_dict, binary=False, ignore_
     # if invalid ignore_index is provided, invalid values (e.g. -1) will be set to 0 
     # and no ignore_index will be used.
     if ignore_index and ignore_index not in range(0, num_classes-1):
-        pred[label == ignore_index] = 0
+        pred[pred == ignore_index] = 0
         label[label == ignore_index] = 0
         ignore_index = None
     
