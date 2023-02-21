@@ -62,9 +62,9 @@ class Decoder(nn.Module):
 
 
 class SegFormer(nn.Module):
-    def __init__(self, in_channels, classes) -> None:
+    def __init__(self, encoder, in_channels, classes) -> None:
         super().__init__()
-        self.encoder = smp.encoders.get_encoder(name="mit_b4", in_channels=in_channels, depth=5, drop_path_rate=0.1)
+        self.encoder = smp.encoders.get_encoder(name=encoder, in_channels=in_channels, depth=5, drop_path_rate=0.1)
         self.decoder = Decoder(num_classes=classes)
 
     def forward(self, img):
