@@ -255,6 +255,7 @@ def train(cfg: DictConfig) -> None:
     scale = get_key_def('scale_data', cfg['augmentation'], default=[0, 1])
     batch_metrics = get_key_def('batch_metrics', cfg['training'], default=None)
     crop_size = get_key_def('crop_size', cfg['augmentation'], default=None)
+    compute_sampler_weights = get_key_def('compute_sampler_weights', cfg['training'], default=False, expected_type=bool)
 
     # MODEL PARAMETERS
     checkpoint_stack = [""]
@@ -377,6 +378,7 @@ def train(cfg: DictConfig) -> None:
                                                                        scale=scale,
                                                                        cfg=cfg,
                                                                        dontcare2backgr=dontcare2backgr,
+                                                                       compute_sampler_weights=compute_sampler_weights,
                                                                        debug=debug)
     cfg.training['num_samples']['trn'] = len(trn_dataloader)
     cfg.training['num_samples']['val'] = len(val_dataloader)

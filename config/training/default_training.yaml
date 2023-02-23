@@ -15,6 +15,7 @@ training:
   state_dict_path: #TODO rename to segmentor_ckpt?
   discriminator_ckpt:
   state_dict_strict_load: True
+  compute_sampler_weights: False
 
 #  precision: 16
 #  step_size: 4

@@ -37,12 +37,23 @@ def flatten_outputs(predictions, number_of_classes):
     outputs_flatten = logits_permuted_cont.view(-1, number_of_classes)
     return outputs_flatten
 
-def get_num_samples(samples_path, params, min_annot_perc, attr_vals, experiment_name:str):
+def get_num_samples(samples_path,
+                    params,
+                    min_annot_perc,
+                    attr_vals,
+                    experiment_name:str,
+                    compute_sampler_weights=False):
     """
     Function to retrieve number of samples, either from config file or directly from hdf5 file.
     :param samples_path: (str) Path to samples folder
     :param params: (dict) Parameters found in the yaml config file.
-    :return: (dict) number of samples for trn, val and tst.
+    :param min_annot_perc: (int) minimum annotated percentage
+    :param attr_vals: (list) attribute values to keep from source ground truth
+    :param experiment_name: (str) experiment name
+    :param compute_sampler_weights: (bool)
+        if True, weights will be computed from dataset patches to oversample the minority class(es) and undersample
+        the majority class(es) during training.
+    :return: (dict) number of patches for trn, val and tst.
     """
     num_samples = {'trn': 0, 'val': 0, 'tst': 0}
     weights = []
@@ -67,15 +78,16 @@ def get_num_samples(samples_path, params, min_annot_perc, attr_vals, experiment_
         with open(dataset_filepath, 'r') as datafile:
             datalist = datafile.readlines()
             if dataset == 'trn':
-                # FIXME: user should decide whether or not this is used (very time consuming)
-                samples_weight = np.ones(num_samples[dataset])
-                for x in tqdm(range(num_samples[dataset]), desc="Computing sample weights"):
-                    label_file = samples_path / datalist[x].split(';')[1]
-                    with rasterio.open(label_file, 'r') as label_handle:
-                        label = label_handle.read()
-                    unique_labels = np.unique(label)
-                    weights.append(''.join([str(int(i)) for i in unique_labels]))
-                    samples_weight = compute_sample_weight('balanced', weights)
+                if not compute_sampler_weights:
+                    samples_weight = np.ones(num_samples[dataset])
+                else:
+                    for x in tqdm(range(num_samples[dataset]), desc="Computing sample weights"):
+                        label_file = samples_path / datalist[x].split(';')[1]
+                        with rasterio.open(label_file, 'r') as label_handle:
+                            label = label_handle.read()
+                        unique_labels = np.unique(label)
+                        weights.append(''.join([str(int(i)) for i in unique_labels]))
+                        samples_weight = compute_sample_weight('balanced', weights)
             logging.debug(samples_weight.shape)
             logging.debug(np.unique(samples_weight))
 
@@ -117,6 +129,7 @@ def create_dataloader(samples_folder: Path,
                       scale: Sequence,
                       cfg: DictConfig,
                       dontcare2backgr: bool = False,
+                      compute_sampler_weights: bool = False,
                       debug: bool = False):
     """
     Function to create dataloader objects for training, validation and test datasets.
@@ -146,7 +159,8 @@ def create_dataloader(samples_folder: Path,
                                                   params=cfg,
                                                   min_annot_perc=min_annot_perc,
                                                   attr_vals=attr_vals,
-                                                  experiment_name=experiment_name
+                                                  experiment_name=experiment_name,
+                                                  compute_sampler_weights=compute_sampler_weights
                                                   )
     if not num_samples['trn'] >= batch_size and num_samples['val'] >= batch_size:
         raise ValueError(f"Number of samples in .hd is less than batch size")
