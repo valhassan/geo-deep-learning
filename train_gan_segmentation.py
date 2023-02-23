@@ -90,6 +90,8 @@ def training(train_loader,
         # scheduler_s.step()
         # scheduler_d.step()
 
+        metrics_dict['lr'].update(optimizer_s.param_groups[0]['lr'])
+
         # Discriminator Output Probabilities (Real | Fake)
         # real_score = torch.sigmoid_(torch.mean(d_gt_output.detach()))
         # fake_score = torch.sigmoid_(torch.mean(d_sg_output.detach()))
@@ -188,9 +190,10 @@ def evaluation(eval_loader,
     if eval_metrics['loss'].avg:
         logging.info(f"\n{dataset} Loss: {eval_metrics['loss'].avg:.4f}")
     if batch_metrics is not None or dataset == 'tst':
+        if single_class_mode:
+            logging.info(f"\n{dataset} iou_0: {eval_metrics['iou_0'].avg:.4f}")
+            logging.info(f"\n{dataset} iou_1: {eval_metrics['iou_1'].avg:.4f}")
         logging.info(f"\n{dataset} iou: {eval_metrics['iou'].avg:.4f}")
-        logging.info(f"\n{dataset} iou_0: {eval_metrics['iou_0'].avg:.4f}")
-        logging.info(f"\n{dataset} iou_1: {eval_metrics['iou_1'].avg:.4f}")
 
     return eval_metrics
 
@@ -218,6 +221,7 @@ def train(cfg: DictConfig) -> None:
     crop_size = get_key_def('crop_size', cfg['augmentation'], default=None)
     # overwrite dontcare values in label if loss doens't implement ignore_index
     dontcare2backgr = False if 'ignore_index' in cfg.loss.keys() else True
+    compute_sampler_weights = get_key_def('compute_sampler_weights', cfg['training'], default=False, expected_type=bool)
 
     # LOGGING PARAMETERS
     run_name = get_key_def(['tracker', 'run_name'], cfg, default='gdl')
@@ -280,7 +284,7 @@ def train(cfg: DictConfig) -> None:
     # Save tracking
     set_tracker(mode='train', type='mlflow', task='segmentation', experiment_name=experiment_name, run_name=run_name,
                 tracker_uri=tracker_uri, params=cfg,
-                keys2log=['general', 'training', 'dataset', 'model', 'optimizer', 'scheduler', 'augmentation'])
+                keys2log=['training', 'tiling', 'dataset', 'model', 'loss', 'optimizer', 'scheduler', 'augmentation'])
     trn_log, val_log, tst_log = [InformationLogger(dataset) for dataset in ['trn', 'val', 'tst']]
 
 
@@ -341,7 +345,12 @@ def train(cfg: DictConfig) -> None:
                                                                        scale=scale,
                                                                        cfg=cfg,
                                                                        dontcare2backgr=dontcare2backgr,
+                                                                       compute_sampler_weights=compute_sampler_weights,
                                                                        debug=debug)
+
+    cfg.training['num_samples']['trn'] = len(trn_dataloader)
+    cfg.training['num_samples']['val'] = len(val_dataloader)
+    cfg.training['num_samples']['tst'] = len(tst_dataloader)
 
     half_num_epochs = num_epochs // 2
     if half_num_epochs > 10:
@@ -428,7 +437,7 @@ def train(cfg: DictConfig) -> None:
             if batch_metrics is not None:
                 val_log.add_values(val_report, epoch)
             else:
-                val_log.add_values(val_report, epoch, ignore=['precision', 'recall','fscore',
+                val_log.add_values(val_report, epoch, ignore=['precision', 'recall','fscore', 'lr',
                                                               'segmentor-loss', 'discriminator-loss',
                                                               'real-score-critic', 'fake-score-critic',
                                                               'iou', 'iou-nonbg'
@@ -509,7 +518,7 @@ def train(cfg: DictConfig) -> None:
                                 debug=debug,
                                 dontcare=dontcare_val)
         if 'tst_log' in locals():  # only save the value if a tracker is set up
-            tst_log.add_values(tst_report, num_epochs,ignore=['precision','recall', 'iou-nonbg',
+            tst_log.add_values(tst_report, num_epochs,ignore=['precision','recall', 'iou-nonbg', 'lr',
                                                               'fscore','segmentor-loss','discriminator-loss',
                                                               'real-score-critic', 'fake-score-critic'])
 
