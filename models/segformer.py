@@ -20,11 +20,20 @@ class MLP(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, in_channels=[64, 128, 320, 512], feature_strides=[4, 8, 16, 32], embedding_dim=768,
+    def __init__(self, encoder="mit_b2",
+                 in_channels=[64, 128, 320, 512],
+                 feature_strides=[4, 8, 16, 32],
+                 embedding_dim=768,
                  num_classes=1, dropout_ratio=0.1):
         super(Decoder, self).__init__()
         assert len(feature_strides) == len(in_channels)
         assert min(feature_strides) == feature_strides[0]
+
+        if encoder == "mit_b0":
+            in_channels = [32, 64, 160, 256]
+        if encoder == "mit_b0" or "mit_b1":
+            embedding_dim = 256
+
         self.num_classes = num_classes
         self.in_channels = in_channels
         c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels = self.in_channels
@@ -65,7 +74,7 @@ class SegFormer(nn.Module):
     def __init__(self, encoder, in_channels, classes) -> None:
         super().__init__()
         self.encoder = smp.encoders.get_encoder(name=encoder, in_channels=in_channels, depth=5, drop_path_rate=0.1)
-        self.decoder = Decoder(num_classes=classes)
+        self.decoder = Decoder(encoder=encoder, num_classes=classes)
 
     def forward(self, img):
         x = self.encoder(img)[2:]
