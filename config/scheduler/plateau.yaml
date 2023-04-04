@@ -1,6 +1,6 @@
 # @package _global_
 scheduler:
   _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
-  mode: ${training.mode}
-  factor: 0.5  # (float) Set dropout probability, e.g. 0.5
-  patience: 15
+  mode: ${training.mode} # in min mode (minimize metric), lr will be reduced
+  factor: 0.1  # (float) factor by which the learning rate will be reduced
+  patience: 10 # number of epochs with no improvement after which learning rate will be reduced.

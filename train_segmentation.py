@@ -20,10 +20,12 @@ from utils.visualization import vis_from_batch, vis_from_dataloader
 # Set the logging file
 logging = get_logger(__name__)  # import logging
 
+
 def training(train_loader,
              model,
              criterion,
              optimizer,
+             scheduler,
              num_classes,
              batch_size,
              ep_idx,
@@ -53,6 +55,7 @@ def training(train_loader,
     """
     model.train()
     train_metrics = create_metrics_dict(num_classes)
+    lr_scheduler, onecycle_scheduler = scheduler
 
     for batch_index, data in enumerate(tqdm(train_loader, desc=f'Iterating train batches with {device.type}')):
         progress_log.open('a', buffering=1).write(tsv_line(ep_idx, 'trn', batch_index, len(train_loader), time.time()))
@@ -101,7 +104,10 @@ def training(train_loader,
                                       gt_vals=np.unique(labels[0].detach().cpu().numpy())))
         loss.backward()
         optimizer.step()
-        # scheduler.step()
+        if onecycle_scheduler:
+            lr_scheduler.step()
+    if not onecycle_scheduler:
+        lr_scheduler.step()
     train_metrics['lr'].update(optimizer.param_groups[0]['lr'])
     logging.info(f'trn Loss: {train_metrics["loss"].avg:.4f}')
     return train_metrics
@@ -387,9 +393,12 @@ def train(cfg: DictConfig) -> None:
     criterion = define_loss(loss_params=cfg.loss, class_weights=class_weights)
     criterion = criterion.to(device)
     optimizer = instantiate(cfg.optimizer, params=model.parameters())
+    onecycle_scheduler = False
     if cfg.scheduler._target_ == 'torch.optim.lr_scheduler.OneCycleLR':
         cfg.scheduler['total_steps'] = max_iters
-    # lr_scheduler = instantiate(cfg.scheduler, optimizer=optimizer)
+        onecycle_scheduler = True
+    lr_scheduler = instantiate(cfg.scheduler, optimizer=optimizer)
+    scheduler_option = (lr_scheduler, onecycle_scheduler)
 
     # Save tracking
     set_tracker(mode='train', type='mlflow', task='segmentation', experiment_name=experiment_name, run_name=run_name,
@@ -438,6 +447,7 @@ def train(cfg: DictConfig) -> None:
                               model=model,
                               criterion=criterion,
                               optimizer=optimizer,
+                              scheduler=scheduler_option,
                               num_classes=num_classes,
                               batch_size=batch_size,
                               ep_idx=epoch,
