@@ -79,14 +79,14 @@ def adapt_checkpoint_to_dp_model(checkpoint: dict, model: Union[nn.Module, nn.Da
             persistent buffers under "model_state_dict" key
         model: a pytorch model to adapt checkpoint to (especially if model is a nn.DataParallel class)
     """
-    if isinstance(model, (nn.DataParallel, nn.parallel.DistributedDataParallel)):
+    if isinstance(model, nn.DataParallel):
         new_state_dict = OrderedDict()
         for k, v in checkpoint['model_state_dict'].items():
             if 'module' not in k:
                 k = 'module.'+k
             else:
                 k = k.replace('features.module.', 'module.features.')
-            new_state_dict[k]=v
+            new_state_dict[k] = v
         new_state_dict['model_state_dict'] = {'module.' + k: v for k, v in checkpoint['model_state_dict'].items()}
         del checkpoint
         checkpoint = {}

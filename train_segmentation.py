@@ -101,8 +101,8 @@ def training(train_loader,
         if ddp_mode:
             torch.distributed.barrier()
             loss = reduce_mean(loss, num_tasks)
+        train_metrics['loss'].update(loss.item(), batch_size)
         if rank == 0:
-            train_metrics['loss'].update(loss.item(), batch_size)
             if device.type == 'cuda' and debug:
                 res, mem = gpu_stats(device=device.index)
                 logging.debug(OrderedDict(trn_loss=f"{train_metrics['loss'].val:.2f}",
@@ -199,22 +199,22 @@ def evaluation(eval_loader,
             if ddp_mode and dataset == "val":
                 torch.distributed.barrier()
                 loss = reduce_mean(loss, num_tasks)
+            eval_metrics['loss'].update(loss.item(), batch_size)
             if rank == 0:
-                eval_metrics['loss'].update(loss.item(), batch_size)
                 if single_class_mode:
                     outputs = torch.sigmoid(outputs)
                     outputs = outputs.squeeze(dim=1)
                 else:
                     outputs = torch.softmax(outputs, dim=1)
-                if (dataset == 'val') and (batch_metrics is not None):
-                    # Compute metrics every n batches. Time consuming.
+                if dataset == 'val' and batch_metrics is not None:
+                    # Compute metrics every n batches. time-consuming.
                     if not batch_metrics <= len(eval_loader):
                         logging.error(f"\nBatch_metrics ({batch_metrics}) is smaller than batch size "
                                       f"{len(eval_loader)}. Metrics in validation loop won't be computed")
                     if (batch_index + 1) % batch_metrics == 0:  # +1 to skip val loop at very beginning
                         eval_metrics = iou(outputs, labels, batch_size, num_classes,
                                            eval_metrics, single_class_mode, dontcare)
-                elif (dataset == 'tst'):
+                elif dataset == 'tst':
                     eval_metrics = iou(outputs, labels, batch_size, num_classes,
                                        eval_metrics, single_class_mode, dontcare)
                 logging.debug(OrderedDict(dataset=dataset, loss=f'{eval_metrics["loss"].avg:.4f}'))
@@ -225,13 +225,13 @@ def evaluation(eval_loader,
                         gpu_RAM=f"{mem['used']/(1024**2):.0f}/{mem['total']/(1024**2):.0f} MiB"
                     ))
 
-            if eval_metrics['loss'].avg:
-                logging.info(f"\n{dataset} Loss: {eval_metrics['loss'].avg:.4f}")
-            if batch_metrics is not None or dataset == 'tst':
-                if single_class_mode:
-                    logging.info(f"\n{dataset} iou_0: {eval_metrics['iou_0'].avg:.4f}")
-                    logging.info(f"\n{dataset} iou_1: {eval_metrics['iou_1'].avg:.4f}")
-                logging.info(f"\n{dataset} iou: {eval_metrics['iou'].avg:.4f}")
+        if eval_metrics['loss'].avg:
+            logging.info(f"\n{dataset} Loss: {eval_metrics['loss'].avg:.4f}")
+        if batch_metrics is not None or dataset == 'tst':
+            if single_class_mode:
+                logging.info(f"\n{dataset} iou_0: {eval_metrics['iou_0'].avg:.4f}")
+                logging.info(f"\n{dataset} iou_1: {eval_metrics['iou_1'].avg:.4f}")
+            logging.info(f"\n{dataset} iou: {eval_metrics['iou'].avg:.4f}")
 
     return eval_metrics
 
@@ -407,7 +407,7 @@ def train(cfg: DictConfig) -> None:
     ddp_mode = runner.ddp_initialized
     rank = cfg.multiproc.local_rank
     num_of_tasks = cfg.multiproc.ntasks
-    ddp_dict = {"ddp_mode": ddp_mode, "num_of_tasks": num_of_tasks, "rank": rank}
+    ddp_dict = {"ddp_mode": ddp_mode, "num_tasks": num_of_tasks, "rank": rank}
 
     cfg.training['num_samples']['trn'] = len(trn_dataloader)
     cfg.training['num_samples']['val'] = len(val_dataloader)
@@ -427,14 +427,12 @@ def train(cfg: DictConfig) -> None:
     scheduler_dict = {"lr_scheduler": lr_scheduler, "onecycle_scheduler": onecycle_scheduler,
                       "plateau_scheduler": plateau_scheduler}
     early_stopping = EarlyStopping(patience=early_stop_epoch)
-
+    config_path = None
+    for list_path in cfg.general.config_path:
+        if list_path['provider'] == 'main':
+            config_path = list_path['path']
+    output_path = tiles_dir.joinpath('model') / run_name
     if rank == 0:
-        # automatic model naming with unique id for each training
-        config_path = None
-        for list_path in cfg.general.config_path:
-            if list_path['provider'] == 'main':
-                config_path = list_path['path']
-        output_path = tiles_dir.joinpath('model') / run_name
         if output_path.is_dir():
             last_mod_time_suffix = datetime.fromtimestamp(output_path.stat().st_mtime).strftime('%Y%m%d-%H%M%S')
             archive_output_path = output_path.parent / f"{output_path.stem}_{last_mod_time_suffix}"

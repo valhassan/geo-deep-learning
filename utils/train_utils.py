@@ -105,7 +105,7 @@ class DistributedSamplerWrapper(DistributedSampler):
 
 
 class TrainEngine:
-    def __int__(self, multiproc: DictConfig, engine_type: str = 'cpu'):
+    def __init__(self, multiproc: DictConfig, engine_type: str = 'cpu'):
         super(TrainEngine, self).__init__()
         self.engine_type = engine_type
         self.ddp_initialized = False
@@ -151,6 +151,8 @@ class TrainEngine:
             return device
 
     def prepare_model(self, model: torch.nn.Module):
+        device = self.get_device()
+        model.to(device)
 
         if self.engine_type == 'cpu':
             return model
