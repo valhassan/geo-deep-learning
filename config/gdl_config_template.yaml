@@ -1,5 +1,6 @@
 defaults:
   - model: gdl_unet
+  - multiproc: distributedparallel
   - discriminator: discriminator
   - verify: default_verify
   - tiling: default_tiling

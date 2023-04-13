@@ -1,0 +1,17 @@
+# @package _global_
+multiproc:
+  ip_address: 'localhost'
+  port: 29500
+  nodes: 1
+  ntasks: 1
+  node_rank: 0
+  local_rank: 0
+  global_rank: 0
+  gpus: ${training.num_gpus}
+  world_size: ${eval:'${multiproc.nodes} * ${multiproc.gpus}'}
+  dist_backend: "nccl"
+  dist_url: "env://"
+  env_var: {"WORLD_SIZE", "RANK", "LOCAL_RANK", "MASTER_ADDR", "MASTER_PORT"}
+
+
+

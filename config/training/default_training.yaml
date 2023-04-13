@@ -1,5 +1,6 @@
 # @package _global_
 training:
+  engine: "distributed_data_parallel"  # use 'cpu' / 'distributed_data_parallel' / 'data_parallel for training
   num_gpus: 1
   batch_size: 2
   num_samples: {'trn':0, 'val':0, 'tst':0}

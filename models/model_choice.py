@@ -28,7 +28,7 @@ def define_model_architecture(
     return instantiate(net_params, in_channels=in_channels, classes=out_classes)
 
 
-def read_checkpoint(filename, out_dir: str = 'checkpoints', update=True) -> DictConfig:
+def read_checkpoint(filename, out_dir: str = 'checkpoints', update=True) -> dict:
     """
     Loads checkpoint from provided path to GDL's expected format,
     ie model's state dictionary should be under "model_state_dict" and
@@ -79,7 +79,7 @@ def adapt_checkpoint_to_dp_model(checkpoint: dict, model: Union[nn.Module, nn.Da
             persistent buffers under "model_state_dict" key
         model: a pytorch model to adapt checkpoint to (especially if model is a nn.DataParallel class)
     """
-    if isinstance(model, nn.DataParallel):
+    if isinstance(model, (nn.DataParallel, nn.parallel.DistributedDataParallel)):
         new_state_dict = OrderedDict()
         for k, v in checkpoint['model_state_dict'].items():
             if 'module' not in k:
@@ -123,8 +123,6 @@ def define_model(
         net_params: dict,
         in_channels: int,
         out_classes: int,
-        main_device: str = 'cpu',
-        devices: List = [],
         state_dict_path: str = None,
         state_dict_strict_load: bool = True,
 ):
@@ -137,11 +135,8 @@ def define_model(
         in_channels=in_channels,
         out_classes=out_classes,
     )
-    model = to_dp_model(model=model, devices=devices) if len(devices) > 1 else model
-    model.to(main_device)
     if state_dict_path:
         checkpoint = read_checkpoint(state_dict_path)
-        if len(devices) > 1:
-            checkpoint = adapt_checkpoint_to_dp_model(checkpoint, model)
+        checkpoint = adapt_checkpoint_to_dp_model(checkpoint, model)
         model.load_state_dict(state_dict=checkpoint['model_state_dict'], strict=state_dict_strict_load)
     return model

@@ -30,6 +30,7 @@ def run_gdl(cfg: DictConfig) -> None:
     :param cfg: (DictConfig) Parameters and functions in the main yaml config
                 file.
     """
+    OmegaConf.register_new_resolver("eval", eval)
     cfg = OmegaConf.create(cfg)
 
     # debug config

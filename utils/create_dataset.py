@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 from rasterio.plot import reshape_as_image
 from omegaconf import OmegaConf, DictConfig
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 from utils.logger import get_logger
 from utils.utils import ordereddict_eval
@@ -146,3 +146,35 @@ class SegmentationDataset(Dataset):
         sample['index'] = index
 
         return sample
+
+
+class DatasetFromSampler(Dataset):
+    """Dataset to create indexes from `Sampler`.
+    Args:
+        sampler: PyTorch sampler
+    """
+
+    def __init__(self, sampler: Sampler):
+        """Initialisation for DatasetFromSampler."""
+        self.sampler = sampler
+        self.sampler_list = None
+
+    def __getitem__(self, index: int):
+        """Gets element of the dataset.
+        Args:
+            index: index of the element in the dataset
+        Returns:
+            Single element by index
+        """
+        if self.sampler_list is None:
+            self.sampler_list = list(self.sampler)
+        return self.sampler_list[index]
+
+    def __len__(self) -> int:
+        """
+        Returns:
+            int: length of the dataset
+        """
+        return len(self.sampler)
+
+
