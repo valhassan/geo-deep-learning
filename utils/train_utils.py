@@ -119,9 +119,19 @@ class TrainEngine:
 
         if self.engine_type == 'distributed_data_parallel':
             # set up distributed data parallel
-            if set(self.multiproc.env_var).issubset(os.environ):
+            if set(self.multiproc.local_env_var).issubset(os.environ):
                 self.multiproc.global_rank = int(os.environ["RANK"])
                 self.multiproc.local_rank = int(os.environ["LOCAL_RANK"])
+                self.multiproc.world_size = int(os.environ["WORLD_SIZE"])
+
+                dist.init_process_group(backend=self.multiproc.dist_backend,
+                                        init_method=self.multiproc.dist_url,
+                                        rank=self.multiproc.global_rank,
+                                        world_size=self.multiproc.world_size)
+
+            elif set(self.multiproc.hpc_env_var).issubset(os.environ):
+                self.multiproc.global_rank = int(os.environ["SLURM_PROCID"])
+                self.multiproc.local_rank = int(os.environ["SLURM_LOCALID"])
                 self.multiproc.world_size = int(os.environ["WORLD_SIZE"])
 
                 dist.init_process_group(backend=self.multiproc.dist_backend,
