@@ -122,6 +122,7 @@ class TrainEngine:
             if set(self.multiproc.local_env_var).issubset(os.environ):
                 self.multiproc.global_rank = int(os.environ["RANK"])
                 self.multiproc.local_rank = int(os.environ["LOCAL_RANK"])
+                self.multiproc.ntasks = int(os.environ["LOCAL_WORLD_SIZE"])
                 self.multiproc.world_size = int(os.environ["WORLD_SIZE"])
 
                 dist.init_process_group(backend=self.multiproc.dist_backend,
@@ -132,6 +133,7 @@ class TrainEngine:
             elif set(self.multiproc.hpc_env_var).issubset(os.environ):
                 self.multiproc.global_rank = int(os.environ["SLURM_PROCID"])
                 self.multiproc.local_rank = int(os.environ["SLURM_LOCALID"])
+                self.multiproc.ntasks = int(os.environ["SLURM_NTASKS_PER_NODE"])
                 self.multiproc.world_size = int(os.environ["WORLD_SIZE"])
 
                 dist.init_process_group(backend=self.multiproc.dist_backend,
