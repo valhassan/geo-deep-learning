@@ -208,12 +208,12 @@ class TrainEngine:
         if self.engine_type == "distributed_data_parallel":
             val_sampler = DistributedSampler(val_dataset)
 
-        trn_dataloader = DataLoader(trn_dataset, batch_size=batch_size, num_workers=num_workers, sampler=trn_sampler,
-                                    drop_last=True)
-        val_dataloader = DataLoader(val_dataset, batch_size=eval_batch_size, num_workers=num_workers,
+        trn_dataloader = DataLoader(trn_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True,
+                                    sampler=trn_sampler, drop_last=True)
+        val_dataloader = DataLoader(val_dataset, batch_size=eval_batch_size, num_workers=num_workers, pin_memory=True,
                                     sampler=val_sampler, drop_last=True)
-        tst_dataloader = DataLoader(tst_dataset, batch_size=eval_batch_size, num_workers=num_workers, shuffle=False,
-                                    drop_last=True) if num_samples['tst'] > 0 else None
+        tst_dataloader = DataLoader(tst_dataset, batch_size=eval_batch_size, num_workers=num_workers,
+                                    pin_memory=True, shuffle=False, drop_last=True) if num_samples['tst'] > 0 else None
 
         if len(trn_dataloader) == 0 or len(val_dataloader) == 0:
             raise ValueError(f"\nTrain and validation dataloader should contain at least one data item."

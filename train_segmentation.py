@@ -68,8 +68,8 @@ def training(train_loader,
     plateau_scheduler = scheduler["plateau_scheduler"]
 
     for batch_index, data in enumerate(tqdm(train_loader, desc=f'Iterating train batches with {device.type}')):
-        inputs = data['sat_img'].to(device)
-        labels = data['map_img'].to(device)
+        inputs = data['sat_img'].to(device, non_blocking=True)
+        labels = data['map_img'].to(device, non_blocking=True)
 
         # forward
         optimizer.zero_grad()
@@ -171,8 +171,8 @@ def evaluation(eval_loader,
     with torch.no_grad():
         for batch_index, data in enumerate(tqdm(eval_loader, dynamic_ncols=True, desc=f'Iterating {dataset} '
                                                                                       f'batches with {device.type}')):
-            inputs = data['sat_img'].to(device)
-            labels = data['map_img'].to(device)
+            inputs = data['sat_img'].to(device, non_blocking=True)
+            labels = data['map_img'].to(device, non_blocking=True)
             outputs = model(inputs)
             if isinstance(outputs, OrderedDict):
                 outputs = outputs['out']
