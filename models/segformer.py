@@ -78,5 +78,5 @@ class SegFormer(nn.Module):
     def forward(self, img):
         x = self.encoder(img)[2:]
         x = self.decoder(x)
-        x = F.interpolate(input=x, size=img.shape[2:], scale_factor=None, mode='bilinear', align_corners=False)
+        x = F.interpolate(input=x.contiguous(), size=img.shape[2:], scale_factor=None, mode='bilinear', align_corners=False)
         return x
