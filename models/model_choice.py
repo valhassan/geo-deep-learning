@@ -28,7 +28,7 @@ def define_model_architecture(
     return instantiate(net_params, in_channels=in_channels, classes=out_classes)
 
 
-def read_checkpoint(filename, out_dir: str = 'checkpoints', update=True) -> dict:
+def read_checkpoint(filename, out_dir: str = 'checkpoints', update=False) -> dict:
     """
     Loads checkpoint from provided path to GDL's expected format,
     ie model's state dictionary should be under "model_state_dict" and
