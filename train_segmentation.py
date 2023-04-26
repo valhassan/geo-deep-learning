@@ -73,7 +73,7 @@ def training(train_loader,
 
         # forward
         optimizer.zero_grad()
-        outputs = model(inputs)
+        outputs = model(inputs.contiguous())
         # added for torchvision models that output an OrderedDict with outputs in 'out' key.
         # More info: https://pytorch.org/hub/pytorch_vision_deeplabv3_resnet101/
         if isinstance(outputs, OrderedDict):
@@ -173,7 +173,7 @@ def evaluation(eval_loader,
                                                                                       f'batches with {device.type}')):
             inputs = data['sat_img'].to(device, non_blocking=True)
             labels = data['map_img'].to(device, non_blocking=True)
-            outputs = model(inputs)
+            outputs = model(inputs.contiguous())
             if isinstance(outputs, OrderedDict):
                 outputs = outputs['out']
 
