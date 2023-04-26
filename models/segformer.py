@@ -15,11 +15,11 @@ class MLP(nn.Module):
 
     def forward(self, x):
         x = x.flatten(2).transpose(1, 2).contiguous()
-        # print(f"x_T: {x.shape}")
-        # print(f"x_T: {x.is_contiguous()}")
+        print(f"x_T: {x.shape}")
+        print(f"x_T: {x.is_contiguous()}")
         x = self.proj(x)
-        # print(f"x_out: {x.shape}")
-        # print(f"x_out: {x.is_contiguous()}")
+        print(f"x_out: {x.shape}")
+        print(f"x_out: {x.is_contiguous()}")
         return x
 
 
@@ -56,14 +56,14 @@ class Decoder(nn.Module):
     def forward(self, x):
         c1, c2, c3, c4 = x
         n, _, h, w = c4.shape
-        # print(f"c1: {c1.shape}")
-        # print(f"c1: {c1.is_contiguous()}")
-        # print(f"c2: {c2.shape}")
-        # print(f"c2: {c2.is_contiguous()}")
-        # print(f"c3: {c3.shape}")
-        # print(f"c3: {c3.is_contiguous()}")
-        # print(f"c4: {c4.shape}")
-        # print(f"c4: {c4.is_contiguous()}")
+        print(f"c1: {c1.shape}")
+        print(f"c1: {c1.is_contiguous()}")
+        print(f"c2: {c2.shape}")
+        print(f"c2: {c2.is_contiguous()}")
+        print(f"c3: {c3.shape}")
+        print(f"c3: {c3.is_contiguous()}")
+        print(f"c4: {c4.shape}")
+        print(f"c4: {c4.is_contiguous()}")
         _c4 = self.linear_c4(c4).permute(0, 2, 1).reshape(n, -1, c4.shape[2], c4.shape[3])
         _c4 = F.interpolate(input=_c4, size=c1.size()[2:], mode='bilinear', align_corners=False)
 
@@ -77,19 +77,19 @@ class Decoder(nn.Module):
         _c = self.linear_fuse(torch.cat([_c4, _c3, _c2, _c1], dim=1))
 
         
-        # print(f"_c1: {_c1.shape}")
-        # print(f"_c1: {_c1.is_contiguous()}")
-        # print(f"_c2: {_c2.shape}")
-        # print(f"_c2: {_c2.is_contiguous()}")
-        # print(f"_c3: {_c3.shape}")
-        # print(f"_c3: {_c3.is_contiguous()}")
-        # print(f"_c4: {_c4.shape}")
-        # print(f"_c4: {_c4.is_contiguous()}")
+        print(f"_c1: {_c1.shape}")
+        print(f"_c1: {_c1.is_contiguous()}")
+        print(f"_c2: {_c2.shape}")
+        print(f"_c2: {_c2.is_contiguous()}")
+        print(f"_c3: {_c3.shape}")
+        print(f"_c3: {_c3.is_contiguous()}")
+        print(f"_c4: {_c4.shape}")
+        print(f"_c4: {_c4.is_contiguous()}")
 
         x = self.dropout(_c)
         x = self.linear_pred(x)
-        # print(f"x: {x.shape}")
-        # print(f"x: {x.is_contiguous()}")
+        print(f"x: {x.shape}")
+        print(f"x: {x.is_contiguous()}")
         return x
 
 
