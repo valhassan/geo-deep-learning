@@ -14,8 +14,12 @@ class MLP(nn.Module):
         self.proj = nn.Linear(input_dim, embed_dim)
 
     def forward(self, x):
-        x = x.flatten(2).transpose(1, 2)
+        x = x.flatten(2).transpose(1, 2).contiguous()
+        # print(f"x_T: {x.shape}")
+        # print(f"x_T: {x.is_contiguous()}")
         x = self.proj(x)
+        # print(f"x_out: {x.shape}")
+        # print(f"x_out: {x.is_contiguous()}")
         return x
 
 
@@ -84,8 +88,8 @@ class Decoder(nn.Module):
 
         x = self.dropout(_c)
         x = self.linear_pred(x)
-        # print(f"_x: {x.shape}")
-        # print(f"_x: {x.is_contiguous()}")
+        # print(f"x: {x.shape}")
+        # print(f"x: {x.is_contiguous()}")
         return x
 
 
@@ -96,7 +100,14 @@ class SegFormer(nn.Module):
         self.decoder = Decoder(encoder=encoder, num_classes=classes)
 
     def forward(self, img):
+        # print(f"x_forward: {img.shape}")
+        # print(f"x_forward: {img.is_contiguous()}")
         x = self.encoder(img)[2:]
+        
         x = self.decoder(x)
+        # print(f"x_forward: {x.shape}")
+        # print(f"x_forward: {x.is_contiguous()}.............")
         x = F.interpolate(input=x, size=img.shape[2:], scale_factor=None, mode='bilinear', align_corners=False)
+        # print(f"x_forward: {x.shape}")
+        # print(f"x_forward: {x.is_contiguous()}.............")
         return x
