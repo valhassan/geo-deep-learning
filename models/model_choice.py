@@ -138,5 +138,5 @@ def define_model(
     if state_dict_path:
         checkpoint = read_checkpoint(state_dict_path)
         checkpoint = adapt_checkpoint_to_dp_model(checkpoint, model)
-        model.load_state_dict(state_dict=checkpoint['model_state_dict'], strict=state_dict_strict_load)
+        model.load_state_dict(state_dict=checkpoint, strict=state_dict_strict_load)
     return model
