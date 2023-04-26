@@ -351,14 +351,24 @@ def main(params: Union[DictConfig, dict]) -> None:
     # Read the concatenation point if requested model is deeplabv3 dualhead
     conc_point = get_key_def('conc_point', params['model'], None)
 
+     # INSTANTIATE MODEL AND LOAD CHECKPOINT FROM PATH
     model = define_model(
         net_params=params.model,
         in_channels=num_bands,
         out_classes=num_classes,
-        main_device=device,
-        devices=[list(gpu_devices_dict.keys())],
         state_dict_path=state_dict,
+        state_dict_strict_load=True,
     )
+    model.to(device)
+
+    # model = define_model(
+    #     net_params=params.model,
+    #     in_channels=num_bands,
+    #     out_classes=num_classes,
+    #     main_device=device,
+    #     devices=[list(gpu_devices_dict.keys())],
+    #     state_dict_path=state_dict,
+    # )
 
     # GET LIST OF INPUT IMAGES FOR INFERENCE
     list_aois = aois_from_csv(csv_path=raw_data_csv, bands_requested=bands_requested)
