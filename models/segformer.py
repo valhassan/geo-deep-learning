@@ -49,7 +49,7 @@ class Decoder(nn.Module):
 
         self.linear_fuse = nn.Sequential(
             nn.Conv2d(in_channels=embedding_dim * 4, out_channels=embedding_dim, kernel_size=1, bias=False),
-            nn.BatchNorm2d(embedding_dim), nn.ReLU(inplace=True))
+            nn.BatchNorm2d(embedding_dim), nn.ReLU(inplace=False))
         self.dropout = nn.Dropout2d(dropout_ratio)
 
         self.linear_pred = nn.Conv2d(embedding_dim, self.num_classes, kernel_size=1)
@@ -104,11 +104,11 @@ class SegFormer(nn.Module):
         # print(f"x_forward: {img.shape}")
         # print(f"x_forward: {img.is_contiguous()}")
         x = self.encoder(img)[2:]
-        
+
         x = self.decoder(x)
         # print(f"x_forward: {x.shape}")
         # print(f"x_forward: {x.is_contiguous()}.............")
         x = F.interpolate(input=x, size=img.shape[2:], scale_factor=None, mode='bilinear', align_corners=False)
-        print(f"x_forward: {x.shape}")
-        print(f"x_forward: {x.is_contiguous()}.............")
+        # print(f"x_forward: {x.shape}")
+        # print(f"x_forward: {x.is_contiguous()}.............")
         return x
