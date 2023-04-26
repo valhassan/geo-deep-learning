@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import segmentation_models_pytorch as smp
+# from segmentation_models_pytorch.encoders import get_encoder
 
 
 class MLP(nn.Module):
@@ -108,6 +109,6 @@ class SegFormer(nn.Module):
         # print(f"x_forward: {x.shape}")
         # print(f"x_forward: {x.is_contiguous()}.............")
         x = F.interpolate(input=x, size=img.shape[2:], scale_factor=None, mode='bilinear', align_corners=False)
-        # print(f"x_forward: {x.shape}")
-        # print(f"x_forward: {x.is_contiguous()}.............")
+        print(f"x_forward: {x.shape}")
+        print(f"x_forward: {x.is_contiguous()}.............")
         return x
