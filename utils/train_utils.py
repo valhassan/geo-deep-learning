@@ -177,7 +177,8 @@ class TrainEngine:
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
             model = torch.nn.parallel.DistributedDataParallel(model,
                                                               device_ids=[self.multiproc.local_rank],
-                                                              output_device=self.multiproc.local_rank)
+                                                              output_device=self.multiproc.local_rank,
+                                                              find_unused_parameters=True)
             return model
 
     def prepare_dataloader(self,
