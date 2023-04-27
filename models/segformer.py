@@ -49,7 +49,7 @@ class Decoder(nn.Module):
 
         self.linear_fuse = nn.Sequential(
             nn.Conv2d(in_channels=embedding_dim * 4, out_channels=embedding_dim, kernel_size=1, bias=False),
-            nn.BatchNorm2d(embedding_dim), nn.ReLU(inplace=False))
+            nn.BatchNorm2d(embedding_dim), nn.ReLU(inplace=True))
         self.dropout = nn.Dropout2d(dropout_ratio)
 
         self.linear_pred = nn.Conv2d(embedding_dim, self.num_classes, kernel_size=1)
