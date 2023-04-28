@@ -192,11 +192,8 @@ class TrainEngine:
         if self.engine_type == 'data_parallel' and num_workers == 0:
             num_workers = len(self.gpu_ids) * 4 if len(self.gpu_ids) > 1 else 4
 
-        samples_weight = torch.from_numpy(samples_weight)
-        trn_sampler = torch.utils.data.sampler.WeightedRandomSampler(samples_weight.type('torch.DoubleTensor'),
-                                                                 len(samples_weight))
-        if self.engine_type == "distributed_data_parallel":
-            trn_sampler = DistributedSamplerWrapper(trn_sampler)
+        # if self.engine_type == "distributed_data_parallel":
+        #     trn_sampler = DistributedSamplerWrapper(trn_sampler)
 
         if self.gpu_devices_dict and not eval_batch_size:
             max_pix_per_mb_gpu = 280  # TODO: this value may need to be finetuned
@@ -207,7 +204,12 @@ class TrainEngine:
         trn_dataset, val_dataset, tst_dataset = datasets
         val_sampler = None
         if self.engine_type == "distributed_data_parallel":
+            trn_sampler = DistributedSampler(trn_dataset)
             val_sampler = DistributedSampler(val_dataset)
+        else:
+            samples_weight = torch.from_numpy(samples_weight)
+            trn_sampler = torch.utils.data.sampler.WeightedRandomSampler(samples_weight.type('torch.DoubleTensor'), 
+                                                                         len(samples_weight))
 
         trn_dataloader = DataLoader(trn_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True,
                                     sampler=trn_sampler, drop_last=True)
