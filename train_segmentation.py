@@ -99,7 +99,7 @@ def training(train_loader,
                                    device=device)
         loss = criterion(outputs, labels)
         if ddp_mode:
-            torch.distributed.barrier()
+            # torch.distributed.barrier()
             loss = reduce_mean(loss, num_tasks)
         train_metrics['loss'].update(loss.item(), batch_size)
         if rank == 0:
@@ -197,7 +197,7 @@ def evaluation(eval_loader,
                                        device=device)
             loss = criterion(outputs, labels)
             if ddp_mode and dataset == "val":
-                torch.distributed.barrier()
+                # torch.distributed.barrier()
                 loss = reduce_mean(loss, num_tasks)
             eval_metrics['loss'].update(loss.item(), batch_size)
             if rank == 0:
@@ -568,8 +568,8 @@ def train(cfg: DictConfig) -> None:
                     last_vis_epoch = epoch
             cur_elapsed = time.time() - since
             # logging.info(f'\nCurrent elapsed time {cur_elapsed // 60:.0f}m {cur_elapsed % 60:.0f}s')
-        if ddp_mode:
-            torch.distributed.barrier()
+        # if ddp_mode:
+        #     torch.distributed.barrier()
 
         early_stopping(val_loss)
         if early_stopping.early_stop:
