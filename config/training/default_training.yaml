@@ -1,6 +1,9 @@
 # @package _global_
 training:
-  engine: "distributed_data_parallel"  # use 'cpu' / 'distributed_data_parallel' / 'data_parallel for training
+  accelerator: "cuda"  # "cpu", "cuda", "mps", "gpu", "tpu", "auto"
+  strategy: "ddp"      # "dp", "ddp", "ddp_spawn", "deepspeed", "fsdp"
+  num_nodes: 1
+  num_tasks: 1
   num_gpus: 1
   batch_size: 2
   num_samples: {'trn':0, 'val':0, 'tst':0}
