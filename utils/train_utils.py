@@ -181,49 +181,30 @@ class TrainEngine:
                                                               find_unused_parameters=True)
             return model
 
-    def prepare_dataloader(self,
-                           datasets: Sequence[Dataset],
-                           samples_weight: Sequence[float],
-                           num_samples: Dict[str, int],
-                           batch_size: int, eval_batch_size: int,
-                           sample_size: int, num_workers: int = 0):
+def prepare_dataloader(datasets: Sequence[Dataset],
+                       samples_weight: Sequence[float],
+                       num_samples: Dict[str, int],
+                       batch_size: int,
+                       num_workers: int = 0):
 
-        # https://discuss.pytorch.org/t/guidelines-for-assigning-num-workers-to-dataloader/813/5
-        if self.engine_type == 'data_parallel' and num_workers == 0:
-            num_workers = len(self.gpu_ids) * 4 if len(self.gpu_ids) > 1 else 4
+    trn_dataset, val_dataset, tst_dataset = datasets
+    samples_weight = torch.from_numpy(samples_weight)
+    trn_sampler = torch.utils.data.sampler.WeightedRandomSampler(samples_weight.type('torch.DoubleTensor'), 
+                                                                 len(samples_weight))
 
-        # if self.engine_type == "distributed_data_parallel":
-        #     trn_sampler = DistributedSamplerWrapper(trn_sampler)
+    trn_dataloader = DataLoader(trn_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True,
+                                sampler=trn_sampler, drop_last=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True, 
+                                drop_last=True)
+    tst_dataloader = DataLoader(tst_dataset, batch_size=batch_size, num_workers=num_workers,
+                                pin_memory=True, shuffle=False, drop_last=True) if num_samples['tst'] > 0 else None
 
-        if self.gpu_devices_dict and not eval_batch_size:
-            max_pix_per_mb_gpu = 280  # TODO: this value may need to be finetuned
-            eval_batch_size = calc_eval_batchsize(self.gpu_devices_dict, batch_size, sample_size, max_pix_per_mb_gpu)
-        elif not eval_batch_size:
-            eval_batch_size = batch_size
+    if len(trn_dataloader) == 0 or len(val_dataloader) == 0:
+        raise ValueError(f"\nTrain and validation dataloader should contain at least one data item."
+                            f"\nTrain dataloader's length: {len(trn_dataloader)}"
+                            f"\nVal dataloader's length: {len(val_dataloader)}")
 
-        trn_dataset, val_dataset, tst_dataset = datasets
-        val_sampler = None
-        if self.engine_type == "distributed_data_parallel":
-            trn_sampler = DistributedSampler(trn_dataset)
-            val_sampler = DistributedSampler(val_dataset)
-        else:
-            samples_weight = torch.from_numpy(samples_weight)
-            trn_sampler = torch.utils.data.sampler.WeightedRandomSampler(samples_weight.type('torch.DoubleTensor'), 
-                                                                         len(samples_weight))
-
-        trn_dataloader = DataLoader(trn_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True,
-                                    sampler=trn_sampler, drop_last=True)
-        val_dataloader = DataLoader(val_dataset, batch_size=eval_batch_size, num_workers=num_workers, pin_memory=True,
-                                    sampler=val_sampler, drop_last=True)
-        tst_dataloader = DataLoader(tst_dataset, batch_size=eval_batch_size, num_workers=num_workers,
-                                    pin_memory=True, shuffle=False, drop_last=True) if num_samples['tst'] > 0 else None
-
-        if len(trn_dataloader) == 0 or len(val_dataloader) == 0:
-            raise ValueError(f"\nTrain and validation dataloader should contain at least one data item."
-                             f"\nTrain dataloader's length: {len(trn_dataloader)}"
-                             f"\nVal dataloader's length: {len(val_dataloader)}")
-
-        return trn_dataloader, val_dataloader, tst_dataloader
+    return trn_dataloader, val_dataloader, tst_dataloader
 
 
 def reduce_mean(tensor, nprocs):
@@ -402,108 +383,3 @@ def prepare_dataset(samples_folder: Path,
                                                                                  aug_type='totensor'),
                                        debug=debug))
     return datasets, num_samples, samples_weight
-
-# def create_dataloader(samples_folder: Path,
-#                       batch_size: int,
-#                       eval_batch_size: int,
-#                       gpu_devices_dict: dict,
-#                       sample_size: int,
-#                       dontcare_val: int,
-#                       crop_size: int,
-#                       num_bands: int,
-#                       min_annot_perc: int,
-#                       attr_vals: Sequence,
-#                       scale: Sequence,
-#                       cfg: DictConfig,
-#                       dontcare2backgr: bool = False,
-#                       compute_sampler_weights: bool = False,
-#                       debug: bool = False):
-#     """
-#     Function to create dataloader objects for training, validation and test datasets.
-#     :param samples_folder: path to folder containting .hdf5 files if task is segmentation
-#     :param batch_size: (int) batch size
-#     :param eval_batch_size: (int) Batch size for evaluation (val and test). Optional, calculated automatically if omitted
-#     :param gpu_devices_dict: (dict) dictionary where each key contains an available GPU with its ram info stored as value
-#     :param sample_size: (int) size of hdf5 samples (used to evaluate eval batch-size)
-#     :param dontcare_val: (int) value in label to be ignored during loss calculation
-#     :param crop_size: (int) size of one side of the square crop performed on original tile during training
-#     :param num_bands: (int) number of bands in imagery
-#     :param min_annot_perc: (int) minimum proportion of ground truth containing non-background information
-#     :param attr_vals: (Sequence)
-#     :param scale: (List) imagery data will be scaled to this min and max value (ex.: 0 to 1)
-#     :param cfg: (dict) Parameters found in the yaml config file.
-#     :param dontcare2backgr: (bool) if True, all dontcare values in label will be replaced with 0 (background value)
-#                             before training
-#     :return: trn_dataloader, val_dataloader, tst_dataloader
-#     """
-#     if not samples_folder.is_dir():
-#         raise FileNotFoundError(f'Could not locate: {samples_folder}')
-#     experiment_name = samples_folder.stem
-#     if not len([f for f in samples_folder.glob('*.csv')]) >= 1:
-#         raise FileNotFoundError(f"Couldn't locate text file containing list of training data in {samples_folder}")
-#
-#     num_samples, samples_weight = get_num_samples(samples_path=samples_folder,
-#                                                   params=cfg,
-#                                                   min_annot_perc=min_annot_perc,
-#                                                   attr_vals=attr_vals,
-#                                                   experiment_name=experiment_name,
-#                                                   compute_sampler_weights=compute_sampler_weights
-#                                                   )
-#     if not num_samples['trn'] >= batch_size and num_samples['val'] >= batch_size:
-#         raise ValueError(f"Number of samples in .hd is less than batch size")
-#     logging.info(f"Number of samples : {num_samples}\n")
-#     dataset_constr = create_dataset.SegmentationDataset
-#     datasets = []
-#
-#     for subset in ["trn", "val", "tst"]:
-#         dataset_file, _ = make_dataset_file_name(experiment_name, min_annot_perc, subset, attr_vals)
-#         dataset_filepath = samples_folder / dataset_file
-#         datasets.append(dataset_constr(dataset_filepath, subset, num_bands,
-#                                        max_sample_count=num_samples[subset],
-#                                        radiom_transform=aug.compose_transforms(params=cfg,
-#                                                                                dataset=subset,
-#                                                                                aug_type='radiometric'),
-#                                        geom_transform=aug.compose_transforms(params=cfg,
-#                                                                              dataset=subset,
-#                                                                              aug_type='geometric',
-#                                                                              dontcare=dontcare_val,
-#                                                                              crop_size=crop_size),
-#                                        totensor_transform=aug.compose_transforms(params=cfg,
-#                                                                                  dataset=subset,
-#                                                                                  scale=scale,
-#                                                                                  dontcare2backgr=dontcare2backgr,
-#                                                                                  dontcare=dontcare_val,
-#                                                                                  aug_type='totensor'),
-#                                        debug=debug))
-#     trn_dataset, val_dataset, tst_dataset = datasets
-#
-#     # https://discuss.pytorch.org/t/guidelines-for-assigning-num-workers-to-dataloader/813/5
-#     # Number of workers
-#     if cfg.training.num_workers:
-#         num_workers = cfg.training.num_workers
-#     else:  # https://discuss.pytorch.org/t/guidelines-for-assigning-num-workers-to-dataloader/813/5
-#         num_workers = len(gpu_devices_dict.keys()) * 4 if len(gpu_devices_dict.keys()) > 1 else 4
-#
-#     samples_weight = torch.from_numpy(samples_weight)
-#     sampler = torch.utils.data.sampler.WeightedRandomSampler(samples_weight.type('torch.DoubleTensor'),
-#                                                              len(samples_weight))
-#
-#     if gpu_devices_dict and not eval_batch_size:
-#         max_pix_per_mb_gpu = 280  # TODO: this value may need to be finetuned
-#         eval_batch_size = calc_eval_batchsize(gpu_devices_dict, batch_size, sample_size, max_pix_per_mb_gpu)
-#     elif not eval_batch_size:
-#         eval_batch_size = batch_size
-#
-#     trn_dataloader = DataLoader(trn_dataset, batch_size=batch_size, num_workers=num_workers, sampler=sampler,
-#                                 drop_last=True)
-#     val_dataloader = DataLoader(val_dataset, batch_size=eval_batch_size, num_workers=num_workers, shuffle=False,
-#                                 drop_last=True)
-#     tst_dataloader = DataLoader(tst_dataset, batch_size=eval_batch_size, num_workers=num_workers, shuffle=False,
-#                                 drop_last=True) if num_samples['tst'] > 0 else None
-#
-#     if len(trn_dataloader) == 0 or len(val_dataloader) == 0:
-#         raise ValueError(f"\nTrain and validation dataloader should contain at least one data item."
-#                          f"\nTrain dataloader's length: {len(trn_dataloader)}"
-#                          f"\nVal dataloader's length: {len(val_dataloader)}")
-#
-#     return trn_dataloader, val_dataloader, tst_dataloader
