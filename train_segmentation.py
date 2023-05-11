@@ -13,7 +13,7 @@ from collections import OrderedDict
 from omegaconf import DictConfig
 from lightning.fabric import Fabric
 from utils.logger import InformationLogger, tsv_line, get_logger, set_tracker
-from utils.metrics import report_classification, create_metrics_dict, iou
+from utils.metrics import create_metrics_dict, iou
 from utils.train_utils import EarlyStopping, prepare_dataset, prepare_dataloader, reduce_mean
 from models.model_choice import read_checkpoint, define_model, adapt_checkpoint_to_dp_model
 from utils.loss import verify_weights, define_loss

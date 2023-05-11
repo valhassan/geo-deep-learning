@@ -156,6 +156,8 @@ def iou(pred, label, batch_size, num_classes, metric_dict, binary=False, ignore_
     mean_iou = jaccard(pred, label)
 
     metric_dict['iou'].update(mean_iou, batch_size)
+    jaccard.reset()
+    jaccard_nobg.reset()
     return metric_dict
 
 
