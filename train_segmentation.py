@@ -1,6 +1,7 @@
 import os
 import shutil
 import time
+import random
 import numpy as np
 import torch
 
@@ -22,6 +23,17 @@ from utils.visualization import vis_from_batch, vis_from_dataloader
 # Set the logging file
 logging = get_logger(__name__)  # import logging
 
+def seed_everything(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+seed_everything(42)
 class Trainer:
     def __init__(self,
                  cfg: DictConfig) -> None:
@@ -300,25 +312,14 @@ class Trainer:
                 if dataset == "val":
                     self.fabric.all_reduce(loss, reduce_op="mean")
                 eval_metrics['loss'].update(loss.item(), batch_size)
-                if self.fabric.is_global_zero:
+                if dataset == 'tst':
                     if single_class_mode:
                         outputs = torch.sigmoid(outputs)
                         outputs = outputs.squeeze(dim=1)
                     else:
                         outputs = torch.softmax(outputs, dim=1)
-                    if dataset == 'val' and batch_metrics is not None:
-                        # Compute metrics every n batches. time-consuming.
-                        if not batch_metrics <= len(eval_loader):
-                            logging.error(f"\nBatch_metrics ({batch_metrics}) is smaller than batch size "
-                                        f"{len(eval_loader)}. Metrics in validation loop won't be computed")
-                        if (batch_index + 1) % batch_metrics == 0:  # +1 to skip val loop at very beginning
-                            eval_metrics = iou(outputs, labels, batch_size, num_classes,
-                                            eval_metrics, single_class_mode, dontcare)
-                    elif dataset == 'tst':
-                        eval_metrics = iou(outputs, labels, batch_size, num_classes,
+                        eval_metrics = iou(outputs, labels, batch_size, num_classes, 
                                         eval_metrics, single_class_mode, dontcare)
-                    logging.debug(OrderedDict(dataset=dataset, loss=f'{eval_metrics["loss"].avg:.4f}'))
-            self.fabric.barrier()
             if eval_metrics['loss'].avg:
                 logging.info(f"\n{dataset} Loss: {eval_metrics['loss'].avg:.4f}")
             if batch_metrics is not None or dataset == 'tst':
