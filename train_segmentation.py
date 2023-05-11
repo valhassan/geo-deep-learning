@@ -208,6 +208,7 @@ class Trainer:
                                        ep_num=epoch + 1,
                                        scale=scale,
                                        device=device)
+            self.fabric.barrier()
             with self.fabric.autocast():
                 loss = criterion(outputs, labels)
             self.fabric.all_reduce(loss, reduce_op="mean")
@@ -293,6 +294,7 @@ class Trainer:
                                            ep_num=epoch + 1,
                                            scale=scale,
                                            device=device)
+                self.fabric.barrier()
                 with self.fabric.autocast():
                     loss = criterion(outputs, labels)
                 if dataset == "val":
@@ -316,7 +318,7 @@ class Trainer:
                         eval_metrics = iou(outputs, labels, batch_size, num_classes,
                                         eval_metrics, single_class_mode, dontcare)
                     logging.debug(OrderedDict(dataset=dataset, loss=f'{eval_metrics["loss"].avg:.4f}'))
-
+            self.fabric.barrier()
             if eval_metrics['loss'].avg:
                 logging.info(f"\n{dataset} Loss: {eval_metrics['loss'].avg:.4f}")
             if batch_metrics is not None or dataset == 'tst':
@@ -430,7 +432,7 @@ class Trainer:
             best_loss = 999
             last_vis_epoch = 0
             checkpoint_stack = [""]
-        
+        self.fabric.barrier()
         for epoch in range(0, self.num_epochs):
             logging.info(f'\nEpoch {epoch}/{self.num_epochs - 1}\n' + "-" * len(f'Epoch {epoch}/{self.num_epochs - 1}'))
             trn_report = self.train_loop(model=model,
