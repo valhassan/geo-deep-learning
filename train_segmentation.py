@@ -47,17 +47,18 @@ class Trainer:
         
         
          # TRAIN ACCELERATOR AND STRATEGY PARAMETERS
+        num_devices = get_key_def('num_gpus', cfg['training'], default=0)
         num_nodes = get_key_def('num_nodes', self.cfg['training'], default=1)
         num_tasks = get_key_def('num_tasks', self.cfg['training'], default=0)
         strategy = get_key_def("strategy", self.cfg['training'], default="dp")
-        num_devices = get_key_def('num_gpus', cfg['training'], default=0)
+        precision = get_key_def("precision", self.cfg['training'], default="32-true")
         if num_devices and not num_devices >= 0:
             raise ValueError("\nMissing mandatory num gpus parameter")
         if strategy == "dp":
             num_tasks = num_devices
         accelerator = get_key_def("accelerator", self.cfg['training'], default="cuda")
         self.fabric = Fabric(accelerator=accelerator, devices=num_tasks, 
-                             num_nodes=num_nodes, strategy=strategy)
+                             num_nodes=num_nodes, strategy=strategy, precision=precision)
         self.fabric.launch()
         
         # Tiles Directory

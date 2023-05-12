@@ -1,7 +1,8 @@
 # @package _global_
 training:
-  accelerator: "cuda"  # "cpu", "cuda", "mps", "gpu", "tpu", "auto"
-  strategy: "ddp"      # "dp", "ddp", "ddp_spawn", "deepspeed", "fsdp"
+  accelerator: "gpu"          # "cpu", "cuda", "mps", "gpu", "tpu", "auto"
+  strategy: "ddp"             # "dp", "ddp", "ddp_spawn", "deepspeed", "fsdp"
+  precision: "16-mixed"       # "bf16-mixed", "16-mixed", "32-true", "64-true" 
   num_nodes: 1
   num_tasks: 1
   num_gpus: 1
