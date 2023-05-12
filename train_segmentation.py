@@ -15,10 +15,10 @@ from omegaconf import DictConfig
 from lightning.fabric import Fabric
 from utils.logger import InformationLogger, tsv_line, get_logger, set_tracker
 from utils.metrics import create_metrics_dict, iou
-from utils.train_utils import EarlyStopping, prepare_dataset, prepare_dataloader, reduce_mean
+from utils.train_utils import EarlyStopping, prepare_dataset, prepare_dataloader
 from models.model_choice import read_checkpoint, define_model, adapt_checkpoint_to_dp_model
 from utils.loss import verify_weights, define_loss
-from utils.utils import gpu_stats, get_key_def, get_device_ids, set_device
+from utils.utils import get_key_def
 from utils.visualization import vis_from_batch, vis_from_dataloader
 # Set the logging file
 logging = get_logger(__name__)  # import logging
@@ -282,8 +282,12 @@ class Trainer:
         with torch.no_grad():
             for batch_index, data in enumerate(tqdm(eval_loader, dynamic_ncols=True, desc=f'Iterating {dataset} '
                                                                                         f'batches with {device.type}')):
-                inputs = data['sat_img'].to(device, non_blocking=True)
-                labels = data['map_img'].to(device, non_blocking=True)
+                if dataset == "tst":
+                    inputs = data['sat_img'].to(device, non_blocking=True)
+                    labels = data['map_img'].to(device, non_blocking=True)
+                else:
+                    inputs = data['sat_img']
+                    labels = data['map_img']
                 outputs = model(inputs.contiguous())
                 if isinstance(outputs, OrderedDict):
                     outputs = outputs['out']
@@ -306,10 +310,11 @@ class Trainer:
                                            ep_num=epoch + 1,
                                            scale=scale,
                                            device=device)
-                self.fabric.barrier()
+                
                 with self.fabric.autocast():
                     loss = criterion(outputs, labels)
                 if dataset == "val":
+                    self.fabric.barrier()
                     self.fabric.all_reduce(loss, reduce_op="mean")
                 eval_metrics['loss'].update(loss.item(), batch_size)
                 if dataset == 'tst':
