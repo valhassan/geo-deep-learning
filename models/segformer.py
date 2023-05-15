@@ -1,8 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# import segmentation_models_pytorch as smp
-from segmentation_models_pytorch.encoders import get_encoder
+import segmentation_models_pytorch as smp
 
 
 class MLP(nn.Module):
@@ -74,7 +73,7 @@ class Decoder(nn.Module):
 class SegFormer(nn.Module):
     def __init__(self, encoder, in_channels, classes) -> None:
         super().__init__()
-        self.encoder = get_encoder(name=encoder, in_channels=in_channels, depth=5, drop_path_rate=0.1)
+        self.encoder = smp.encoders.get_encoder(name=encoder, in_channels=in_channels, depth=5, drop_path_rate=0.1)
         self.decoder = Decoder(encoder=encoder, num_classes=classes)
 
     def forward(self, img):
