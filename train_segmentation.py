@@ -360,10 +360,10 @@ class Trainer:
                                                                             num_samples=num_samples,
                                                                             batch_size=self.batch_size,
                                                                             num_workers=self.num_workers)
-        self.cfg.training['num_samples']['trn'] = len(trn_dataloader)
-        self.cfg.training['num_samples']['val'] = len(val_dataloader)
-        self.cfg.training['num_samples']['tst'] = len(tst_dataloader)
-        max_iters = self.num_epochs * len(trn_dataloader)
+        self.cfg.training['num_samples']['trn'] = len(trn_dataloader.dataset)
+        self.cfg.training['num_samples']['val'] = len(val_dataloader.dataset)
+        self.cfg.training['num_samples']['tst'] = len(tst_dataloader.dataset)
+        max_iters = self.num_epochs * len(trn_dataloader.dataset)
         trn_dataloader, val_dataloader = self.fabric.setup_dataloaders(trn_dataloader, val_dataloader)
         
         # INSTANTIATE MODEL AND LOAD CHECKPOINT FROM PATH
