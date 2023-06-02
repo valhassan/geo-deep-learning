@@ -188,21 +188,19 @@ def prepare_dataloader(datasets: Sequence[Dataset],
                        num_workers: int = 0):
 
     trn_dataset, val_dataset, tst_dataset = datasets
-    samples_weight = torch.from_numpy(samples_weight)
-    trn_sampler = torch.utils.data.sampler.WeightedRandomSampler(samples_weight.type('torch.DoubleTensor'), 
-                                                                 len(samples_weight))
+    # samples_weight = torch.from_numpy(samples_weight)
+    # trn_sampler = torch.utils.data.sampler.WeightedRandomSampler(samples_weight.type('torch.DoubleTensor'), 
+    #                                                              len(samples_weight))
 
-    trn_dataloader = DataLoader(trn_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True,
-                                sampler=trn_sampler, drop_last=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=True, 
-                                drop_last=True)
+    trn_dataloader = DataLoader(trn_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False)
     tst_dataloader = DataLoader(tst_dataset, batch_size=batch_size, num_workers=num_workers,
-                                pin_memory=True, shuffle=False, drop_last=True) if num_samples['tst'] > 0 else None
+                                pin_memory=True, shuffle=False) if num_samples['tst'] > 0 else None
 
     if len(trn_dataloader) == 0 or len(val_dataloader) == 0:
         raise ValueError(f"\nTrain and validation dataloader should contain at least one data item."
-                            f"\nTrain dataloader's length: {len(trn_dataloader)}"
-                            f"\nVal dataloader's length: {len(val_dataloader)}")
+                            f"\nTrain dataloader's length: {len(trn_dataloader.dataset)}"
+                            f"\nVal dataloader's length: {len(val_dataloader.dataset)}")
 
     return trn_dataloader, val_dataloader, tst_dataloader
 
