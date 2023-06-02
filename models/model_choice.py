@@ -135,9 +135,10 @@ def define_model(
         in_channels=in_channels,
         out_classes=out_classes,
     )
-    load_key = "model" if "model" in checkpoint else "model_state_dict"
+    
     if state_dict_path:
         checkpoint = read_checkpoint(state_dict_path)
         checkpoint = adapt_checkpoint_to_dp_model(checkpoint, model)
+        load_key = "model" if "model" in checkpoint else "model_state_dict"
         model.load_state_dict(state_dict=checkpoint[load_key], strict=state_dict_strict_load)
     return model
