@@ -1,5 +1,3 @@
-import os
-import h5py
 import rasterio
 import numpy as np
 import pandas as pd
