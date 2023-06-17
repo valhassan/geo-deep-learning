@@ -1,6 +1,7 @@
 import rasterio
 import numpy as np
 import pandas as pd
+import kornia as K
 
 from pathlib import Path
 from rasterio.plot import reshape_as_image
@@ -27,6 +28,7 @@ class SegmentationDataset(Dataset):
                  num_bands,
                  max_sample_count=None,
                  dontcare=None,
+                 dontcare2backgr=False,
                  radiom_transform=None,
                  geom_transform=None,
                  totensor_transform=None,
@@ -40,6 +42,7 @@ class SegmentationDataset(Dataset):
         self.totensor_transform = totensor_transform
         self.debug = debug
         self.dontcare = dontcare
+        self.dontcare2backgr = dontcare2backgr
         self.list_path = dataset_list_path
         self.parent_folder = dataset_list_path.parent
         
@@ -67,14 +70,7 @@ class SegmentationDataset(Dataset):
             pass
 
         sample = {"sat_img": sat_img, "map_img": map_img, "metadata": metadata, "list_path": self.list_path}
-        # radiometric transforms should always precede geometric ones
-        if self.radiom_transform:  
-            sample = self.radiom_transform(sample)
-        # rotation, geometric scaling, flip and crop. 
-        # Will also put channels first and convert to torch tensor from numpy.
-        if self.geom_transform:
-            sample = self.geom_transform(sample)
-        sample = self.totensor_transform(sample)
+        sample = self._to_tensor(sample)
 
         if self.debug:
             # assert no new class values in map_img
@@ -115,7 +111,7 @@ class SegmentationDataset(Dataset):
         """
         image_path = self.parent_folder / self.assets[index]["image"]
         with rasterio.open(image_path, 'r') as image_handle:
-                image = reshape_as_image(image_handle.read())
+                image = image_handle.read()
                 metadata = image_handle.meta
         assert self.num_bands <= image.shape[-1]
         
@@ -133,10 +129,22 @@ class SegmentationDataset(Dataset):
         label_path = self.parent_folder / self.assets[index]["label"]
         
         with rasterio.open(label_path, 'r') as label_handle:
-                label = reshape_as_image(label_handle.read())
-                label = label[..., 0]
+                label = label_handle.read()
         
         return label
+    
+    def _to_tensor(self, sample: dict):
+        sat_img = sample['sat_img']
+        sat_img = K.image_to_tensor(sat_img.transpose(1, 2, 0), keepdim=True)
+        sat_img = sat_img.float() / 255.
+        map_img = None
+        if 'map_img' in sample.keys():
+            if sample['map_img'] is not None:  # This can also be used in inference.
+                map_img = sample['map_img']
+                if self.dontcare2backgr:
+                    map_img[map_img == self.dontcare_val] = 0
+                map_img = K.image_to_tensor(map_img.transpose(1, 2, 0), keepdim=True)
+        return {'sat_img': sat_img, 'map_img': map_img.float()}
         
         
 

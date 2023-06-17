@@ -11,11 +11,43 @@ import torch
 # Unclear issue, mentioned here: https://github.com/pytorch/pytorch/issues/2083
 import random
 import numpy as np
+import kornia as K
+from typing import List
+from kornia.augmentation import AugmentationSequential
 from skimage import transform, exposure
 from torchvision import transforms
 from utils.utils import get_key_def, pad, minmax_scale
 
 logging.getLogger(__name__)
+
+class Transforms:
+    def __init__(self,
+                 mean: List[float],
+                 std: List[float]) -> None:
+        """Geometric and Photometric Transforms enabled by Kornia
+
+        Args:
+            mean (List[float]): mean values for normalization
+            std (List[float]): std values for normalization
+        """
+        self.mean = torch.Tensor(mean)
+        self.std = torch.Tensor(std)
+    
+        self.train_transform = AugmentationSequential(K.augmentation.container.ImageSequential
+                                        (K.augmentation.RandomHorizontalFlip(p=0.5),
+                                        K.augmentation.RandomVerticalFlip(p=0.5), 
+                                        K.augmentation.RandomAffine(degrees=[-45., 45.], p=0.5),
+                                        K.augmentation.RandomResizedCrop(size=(512, 512), p=0.5, 
+                                                                        cropping_mode="resample"),
+                                                                        random_apply=1,
+                                                                        random_apply_weights=[0.5, 0.5, 0.5, 0.5],),
+                                        K.augmentation.RandomPlanckianJitter(mode="blackbody", p=0.4),
+                                        K.augmentation.ColorJiggle(brightness=0.1, contrast=0.1, p=0.3),
+                                        K.augmentation.Normalize(self.mean, self.std, p=1),
+                                        data_keys=["image", "mask"],
+                                        )
+        self.normalize_transform = AugmentationSequential(K.augmentation.Normalize(self.mean, self.std, p=1),
+                                           data_keys=["input"],)
 
 
 def compose_transforms(params,

@@ -365,11 +365,6 @@ def prepare_dataset(samples_folder: Path,
         dataset_filepath = samples_folder / dataset_file
         datasets.append(dataset_constr(dataset_filepath, subset, num_bands,
                                        max_sample_count=num_samples[subset],
-                                       totensor_transform=aug.compose_transforms(params=cfg,
-                                                                                 dataset=subset,
-                                                                                 scale=scale,
-                                                                                 dontcare2backgr=dontcare2backgr,
-                                                                                 dontcare=dontcare_val,
-                                                                                 aug_type='totensor'),
+                                       dontcare2backgr=dontcare2backgr,
                                        debug=debug))
     return datasets, num_samples, samples_weight
