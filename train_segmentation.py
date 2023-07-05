@@ -13,6 +13,7 @@ from typing import Sequence
 from collections import OrderedDict
 from omegaconf import DictConfig
 from lightning.fabric import Fabric
+from lightning.fabric.strategies.ddp import DDPStrategy
 from utils.augmentation import Transforms
 from utils.logger import InformationLogger, tsv_line, get_logger, set_tracker
 from utils.metrics import create_metrics_dict, iou
@@ -58,6 +59,8 @@ class Trainer:
             raise ValueError("\nMissing mandatory num gpus parameter")
         if strategy == "dp":
             num_tasks = num_devices
+        if strategy == "ddp":
+            strategy = DDPStrategy(find_unused_parameters=True)
         accelerator = get_key_def("accelerator", self.cfg['training'], default="cuda")
         self.fabric = Fabric(accelerator=accelerator, devices=num_tasks, 
                              num_nodes=num_nodes, strategy=strategy, precision=precision)
@@ -387,6 +390,7 @@ class Trainer:
         optimizer = instantiate(self.cfg.optimizer, params=model.parameters())
         model, optimizer = self.fabric.setup(model, optimizer)
         device = self.fabric.device
+
         criterion = define_loss(loss_params=self.cfg.loss, class_weights=self.class_weights)
         criterion = criterion.to(device)
     
