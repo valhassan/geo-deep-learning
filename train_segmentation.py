@@ -292,12 +292,8 @@ class Trainer:
         with torch.no_grad():
             for batch_index, data in enumerate(tqdm(eval_loader, dynamic_ncols=True, desc=f'Iterating {dataset} '
                                                                                         f'batches with {device.type}')):
-                if dataset == "tst":
-                    inputs = data['sat_img'].to(device, non_blocking=True)
-                    labels = data['map_img'].to(device, non_blocking=True)
-                else:
-                    inputs = data['sat_img']
-                    labels = data['map_img']
+                inputs = data['sat_img']
+                labels = data['map_img']
                 inputs = self.transforms.normalize_transform(inputs)
                 labels = labels.squeeze(1).long()
                 outputs = model(inputs.contiguous())
