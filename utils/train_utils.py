@@ -192,8 +192,10 @@ def prepare_dataloader(datasets: Sequence[Dataset],
     # trn_sampler = torch.utils.data.sampler.WeightedRandomSampler(samples_weight.type('torch.DoubleTensor'), 
     #                                                              len(samples_weight))
 
-    trn_dataloader = DataLoader(trn_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False)
+    trn_dataloader = DataLoader(trn_dataset, batch_size=batch_size, 
+                                num_workers=num_workers, pin_memory=True, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, 
+                                num_workers=num_workers, pin_memory=True, shuffle=False)
     tst_dataloader = DataLoader(tst_dataset, batch_size=batch_size, num_workers=num_workers,
                                 pin_memory=True, shuffle=False) if num_samples['tst'] > 0 else None
 
