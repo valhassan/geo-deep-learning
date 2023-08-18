@@ -17,7 +17,7 @@ from lightning.fabric.strategies.ddp import DDPStrategy
 from utils.augmentation import Transforms
 from utils.logger import InformationLogger, tsv_line, get_logger, set_tracker
 from utils.metrics import create_metrics_dict, iou
-from utils.train_utils import EarlyStopping, prepare_dataset, prepare_dataloader
+from utils.train_utils import EarlyStopping, prepare_dataset, prepare_dataloader, freeze_model_parts
 from models.model_choice import read_checkpoint, define_model, adapt_checkpoint_to_dp_model
 from utils.loss import verify_weights, define_loss
 from utils.utils import get_key_def
@@ -103,6 +103,7 @@ class Trainer:
         self.attr_vals = get_key_def("attribute_values", self.cfg['dataset'], default=-1)
         
         # MODEL PARAMETERS
+        self.freeze_model_parts = get_key_def('freeze_parts', self.cfg, default=None)
         self.train_state_dict_path = get_key_def('state_dict_path', self.cfg['training'], 
                                                  default=None, expected_type=str)
         if self.train_state_dict_path and not Path(self.train_state_dict_path).is_file():
@@ -387,7 +388,9 @@ class Trainer:
                             state_dict_path=self.train_state_dict_path,
                             state_dict_strict_load=self.state_dict_strict,
                             )
-        optimizer = instantiate(self.cfg.optimizer, params=model.parameters())
+        if self.freeze_model_parts:
+            freeze_model_parts(model=model, sub_models=self.freeze_model_parts)
+        optimizer = instantiate(self.cfg.optimizer, params=filter(lambda p: p.requires_grad, model.parameters()))
         model, optimizer = self.fabric.setup(model, optimizer)
         device = self.fabric.device
 

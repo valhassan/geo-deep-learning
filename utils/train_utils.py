@@ -206,6 +206,12 @@ def prepare_dataloader(datasets: Sequence[Dataset],
 
     return trn_dataloader, val_dataloader, tst_dataloader
 
+def freeze_model_parts(model: torch.nn.Module, sub_models: Sequence[str]):
+    for sub in sub_models:
+        if hasattr(model, sub):
+            getattr(model, sub).requires_grad_(False)
+        else:
+            logging.warning(f"Model object has no part: {sub} to freeze")
 
 def reduce_mean(tensor, nprocs):
     rt = tensor.clone()
