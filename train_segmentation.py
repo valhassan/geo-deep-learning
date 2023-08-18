@@ -455,6 +455,10 @@ class Trainer:
             last_vis_epoch = 0
             checkpoint_stack = [""]
         self.fabric.barrier()
+        for name, para in model.named_parameters():
+            print("-"*20)
+            print(f"name: {name}")
+            print(f"requires_grad: {para.requires_grad}")
         for epoch in range(0, self.num_epochs):
             logging.info(f'\nEpoch {epoch}/{self.num_epochs - 1}\n' + "-" * len(f'Epoch {epoch}/{self.num_epochs - 1}'))
             trn_report = self.train_loop(model=model,
