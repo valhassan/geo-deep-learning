@@ -169,7 +169,8 @@ class Trainer:
                    vis_output,
                    device: torch.device, 
                    scale: list[int], 
-                   vis_params
+                   vis_params,
+                   aux_output: bool = False
                    ):
         """
         Train loop, returns train metrics
@@ -197,7 +198,7 @@ class Trainer:
         lr_scheduler = scheduler["lr_scheduler"]
         onecycle_scheduler = scheduler["onecycle_scheduler"]
         plateau_scheduler = scheduler["plateau_scheduler"]
-
+        
         for batch_index, data in enumerate(tqdm(train_loader, desc=f'Iterating train batches with {device.type}')):
             inputs = data['sat_img']
             labels = data['map_img']
@@ -207,7 +208,10 @@ class Trainer:
 
             # forward
             optimizer.zero_grad()
-            outputs = model(inputs)
+            if aux_output:
+                outputs, outputs_aux = model(inputs)
+            else:
+                outputs = model(inputs)
            # added for torchvision models that output an OrderedDict with outputs in 'out' key.
              # More info: https://pytorch.org/hub/pytorch_vision_deeplabv3_resnet101/
             if isinstance(outputs, OrderedDict):
@@ -233,7 +237,12 @@ class Trainer:
                                        device=device)
             self.fabric.barrier()
             with self.fabric.autocast():
-                loss = criterion(outputs, labels)
+                if aux_output:
+                    loss_main = criterion(outputs, labels)
+                    loss_aux = criterion(outputs_aux, labels)
+                    loss = 0.4 * loss_aux + loss_main
+                else:
+                    loss = criterion(outputs, labels)
             self.fabric.all_reduce(loss, reduce_op="mean")
             train_metrics['loss'].update(loss.item(), batch_size)
             self.fabric.backward(loss)
@@ -382,18 +391,30 @@ class Trainer:
         logging.info(f"\nInstantiate {self.cfg.model._target_} model with {self.num_bands} "
                      f"input channels and {self.num_classes} output classes.")
         
+        aux_output = False
         model = define_model(net_params=self.cfg.model,
                             in_channels=self.num_bands,
                             out_classes=self.num_classes,
                             state_dict_path=self.train_state_dict_path,
                             state_dict_strict_load=self.state_dict_strict,
                             )
+        
+        if self.cfg.model._target_ == "models.hrnet.hrnet_ocr.HRNet":
+            from models.hrnet.backbone import model_urls
+            from models.hrnet.utils import ModelHelpers
+            aux_output = True
+            if self.cfg.model.pretrained:
+                weights_file = ModelHelpers.load_url(model_urls['hrnetv2'], download=False)
+                if self.fabric.is_global_zero:
+                    weights_file = ModelHelpers.load_url(model_urls['hrnetv2'], download=True)
+                self.fabric.barrier()
+                model.load_state_dict(torch.load(weights_file, map_location=None), strict=False)
+        
         if self.freeze_model_parts:
             freeze_model_parts(model=model, sub_models=self.freeze_model_parts)
         optimizer = instantiate(self.cfg.optimizer, params=filter(lambda p: p.requires_grad, model.parameters()))
         model, optimizer = self.fabric.setup(model, optimizer)
         device = self.fabric.device
-
         criterion = define_loss(loss_params=self.cfg.loss, class_weights=self.class_weights)
         criterion = criterion.to(device)
     
@@ -455,10 +476,10 @@ class Trainer:
             last_vis_epoch = 0
             checkpoint_stack = [""]
         self.fabric.barrier()
-        for name, para in model.named_parameters():
-            print("-"*20)
-            print(f"name: {name}")
-            print(f"requires_grad: {para.requires_grad}")
+        # for name, para in model.named_parameters():
+        #     print("-"*20)
+        #     print(f"name: {name}")
+        #     print(f"requires_grad: {para.requires_grad}")
         for epoch in range(0, self.num_epochs):
             logging.info(f'\nEpoch {epoch}/{self.num_epochs - 1}\n' + "-" * len(f'Epoch {epoch}/{self.num_epochs - 1}'))
             trn_report = self.train_loop(model=model,
@@ -472,7 +493,8 @@ class Trainer:
                                          vis_output=output_path,
                                          device=device,
                                          scale=self.scale,
-                                         vis_params=self.vis_params
+                                         vis_params=self.vis_params,
+                                         aux_output=aux_output
                                          )
             
             val_report = self.evaluation_loop(model=model,
