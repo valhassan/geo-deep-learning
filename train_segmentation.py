@@ -360,8 +360,6 @@ class Trainer:
         
     def run(self):
         since = time.time()
-        
-        
         logging.info(f'\nPreparing datasets (trn, val, tst) from data in {self.tiles_dir}...')
         datasets, num_samples, samples_weight = prepare_dataset(samples_folder=self.tiles_dir,
                                                                 batch_size=self.batch_size,
@@ -476,10 +474,6 @@ class Trainer:
             last_vis_epoch = 0
             checkpoint_stack = [""]
         self.fabric.barrier()
-        # for name, para in model.named_parameters():
-        #     print("-"*20)
-        #     print(f"name: {name}")
-        #     print(f"requires_grad: {para.requires_grad}")
         for epoch in range(0, self.num_epochs):
             logging.info(f'\nEpoch {epoch}/{self.num_epochs - 1}\n' + "-" * len(f'Epoch {epoch}/{self.num_epochs - 1}'))
             trn_report = self.train_loop(model=model,
