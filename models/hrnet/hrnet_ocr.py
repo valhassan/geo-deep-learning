@@ -12,7 +12,6 @@ class HRNet(nn.Module):
     High Resolution Network (hrnet_w48_v2) with Object Contextual Representation module
     
     """
-    
     def __init__(self, pretrained, in_channels, classes) -> None:
         super(HRNet, self).__init__()
         if in_channels != 3:
@@ -29,10 +28,8 @@ class HRNet(nn.Module):
         aux_out = F.interpolate(aux_out, size=input_size, mode='bilinear', align_corners=False)
         cls_out = F.interpolate(cls_out, size=input_size, mode='bilinear', align_corners=False)
         if self.training:
-            print(f"I am in training mode")
             return cls_out, aux_out
         else:
-            print(f"I am not in training mode")
             return cls_out
 
 if __name__ == "__main__":
