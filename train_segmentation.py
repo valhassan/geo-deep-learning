@@ -53,13 +53,13 @@ class Trainer:
         num_devices = get_key_def('num_gpus', cfg['training'], default=0)
         num_nodes = get_key_def('num_nodes', self.cfg['training'], default=1)
         num_tasks = get_key_def('num_tasks', self.cfg['training'], default=0)
-        strategy = get_key_def("strategy", self.cfg['training'], default="dp")
+        self.strategy = get_key_def("strategy", self.cfg['training'], default="dp")
         precision = get_key_def("precision", self.cfg['training'], default="32-true")
         if num_devices and not num_devices >= 0:
             raise ValueError("\nMissing mandatory num gpus parameter")
-        if strategy == "dp":
+        if self.strategy == "dp":
             num_tasks = num_devices
-        if strategy == "ddp":
+        if self.strategy == "ddp":
             strategy = DDPStrategy(find_unused_parameters=True)
         accelerator = get_key_def("accelerator", self.cfg['training'], default="cuda")
         self.fabric = Fabric(accelerator=accelerator, devices=num_tasks, 
@@ -407,7 +407,9 @@ class Trainer:
                     weights_file = ModelHelpers.load_url(model_urls['hrnetv2'], download=True)
                 self.fabric.barrier()
                 model.load_state_dict(torch.load(weights_file, map_location=None), strict=False)
-        
+                
+        if self.strategy == "ddp":
+            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         if self.freeze_model_parts:
             freeze_model_parts(model=model, sub_models=self.freeze_model_parts)
         optimizer = instantiate(self.cfg.optimizer, params=filter(lambda p: p.requires_grad, model.parameters()))
