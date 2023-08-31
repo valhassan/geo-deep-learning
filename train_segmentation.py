@@ -412,6 +412,8 @@ class Trainer:
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         if self.freeze_model_parts:
             freeze_model_parts(model=model, sub_models=self.freeze_model_parts)
+        if int(torch.__version__[0]) == 2:
+            model = torch.compile(model)
         optimizer = instantiate(self.cfg.optimizer, params=filter(lambda p: p.requires_grad, model.parameters()))
         model, optimizer = self.fabric.setup(model, optimizer)
         device = self.fabric.device
