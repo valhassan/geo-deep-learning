@@ -415,9 +415,7 @@ class Trainer:
         # if int(torch.__version__[0]) == 2:
         #     model = torch.compile(model=model, mode="reduce-overhead")
         optimizer = instantiate(self.cfg.optimizer, params=filter(lambda p: p.requires_grad, model.parameters()))
-        model = self.fabric.setup_module(model)
-        optimizer = self.fabric.setup_optimizers(optimizer)
-        # model, optimizer = self.fabric.setup(model, optimizer)
+        model, optimizer = self.fabric.setup(model, optimizer)
         device = self.fabric.device
         criterion = define_loss(loss_params=self.cfg.loss, class_weights=self.class_weights)
         criterion = criterion.to(device)
