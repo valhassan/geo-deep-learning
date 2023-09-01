@@ -60,10 +60,10 @@ class Trainer:
         if self.strategy == "dp":
             num_tasks = num_devices
         if self.strategy == "ddp":
-            strategy = DDPStrategy(find_unused_parameters=True)
+            self.strategy = DDPStrategy(find_unused_parameters=True)
         accelerator = get_key_def("accelerator", self.cfg['training'], default="cuda")
         self.fabric = Fabric(accelerator=accelerator, devices=num_tasks, 
-                             num_nodes=num_nodes, strategy=strategy, precision=precision)
+                             num_nodes=num_nodes, strategy=self.strategy, precision=precision)
         self.fabric.launch()
         
         # Tiles Directory
@@ -408,7 +408,7 @@ class Trainer:
                 self.fabric.barrier()
                 model.load_state_dict(torch.load(weights_file, map_location=None), strict=False)
                 
-        if self.strategy == "ddp":
+        if self.strategy == "ddp" or self.strategy == "fsdp":
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         if self.freeze_model_parts:
             freeze_model_parts(model=model, sub_models=self.freeze_model_parts)
