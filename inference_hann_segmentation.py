@@ -152,6 +152,7 @@ def segmentation(param,
     sample = {'sat_img': None, 'map_img': None, 'metadata': None}
     start_seg = time.time()
     print_log = True if logging.level == 20 else False  # 20 is INFO
+    model.to(device)
     model.eval()  # switch to evaluate mode
     # initialize test time augmentation
     transforms = tta.aliases.d4_transform()
@@ -332,8 +333,6 @@ def main(params: Union[DictConfig, dict]) -> None:
         net_params=params.model,
         in_channels=num_bands,
         out_classes=num_classes,
-        main_device=device,
-        devices=[list(gpu_devices_dict.keys())],
         state_dict_path=state_dict,
     )
 
