@@ -287,6 +287,7 @@ def main(params: Union[DictConfig, dict]) -> None:
     num_classes = len(classes_dict)
     num_classes = num_classes + 1 if num_classes > 1 else num_classes  # multiclass account for background
     num_bands = len(bands_requested)
+    clahe_clip_limit = get_key_def('clahe_clip_limit', params['tiling'], expected_type=float, default=0.)
 
     working_folder = state_dict.parent.joinpath(f'inference_{num_bands}bands')
     logging.info("\nThe state dict path directory used '{}'".format(working_folder))
@@ -337,7 +338,7 @@ def main(params: Union[DictConfig, dict]) -> None:
     )
 
     # GET LIST OF INPUT IMAGES FOR INFERENCE
-    list_aois = aois_from_csv(csv_path=raw_data_csv, bands_requested=bands_requested)
+    list_aois = aois_from_csv(csv_path=raw_data_csv, bands_requested=bands_requested, equalize_clahe_clip_limit=clahe_clip_limit)
 
     # LOOP THROUGH LIST OF INPUT IMAGES
     for aoi in tqdm(list_aois, desc='Inferring from images', position=0, leave=True):
