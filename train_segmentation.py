@@ -345,8 +345,8 @@ class Trainer:
                         outputs = outputs.squeeze(dim=1)
                     else:
                         outputs = torch.softmax(outputs, dim=1)
-                        eval_metrics = iou(outputs, labels, batch_size, num_classes, 
-                                        eval_metrics, single_class_mode, dontcare)
+                    eval_metrics = iou(outputs, labels, batch_size, num_classes, 
+                                       eval_metrics, single_class_mode, dontcare)
             if eval_metrics['loss'].avg:
                 logging.info(f"\n{dataset} Loss: {eval_metrics['loss'].avg:.4f}")
             if batch_metrics is not None or dataset == 'tst':
