@@ -2,7 +2,7 @@
 tiling:
   tiling_data_dir: ${general.tiling_data_dir}
   train_val_percent: {'trn':0.8, 'val':0.2, 'tst':0}
-  chip_size: 56
+  patch_size: 56
   overlap_size:
   min_annot_perc: 1
   use_stratification: False
