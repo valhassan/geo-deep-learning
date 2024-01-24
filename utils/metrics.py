@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torchmetrics.classification
+from torch import tensor
 from sklearn.metrics import classification_report
 from torch import IntTensor
 from torchmetrics import JaccardIndex
@@ -109,11 +110,8 @@ def metric_match_device(metric: torchmetrics.Metric, pred: torch.Tensor, label: 
         metric.to(pred.device)
 
 
-def iou(pred, label, batch_size, num_classes, metric_dict, binary=False, ignore_index=None):
+def iou(pred, label, batch_size, num_classes, metric_dict, ignore_index=None):
     """Calculate the intersection over union class-wise and mean-iou"""
-    task = "binary"
-    if not binary:
-        task = "multiclass"
     num_classes = num_classes + 1 if num_classes == 1 else num_classes
     # Torchmetrics cannot handle ignore_index that are not in range 0 -> num_classes-1.
     # if invalid ignore_index is provided, invalid values (e.g. -1) will be set to 0 
@@ -127,7 +125,7 @@ def iou(pred, label, batch_size, num_classes, metric_dict, binary=False, ignore_
     if ignore_index is not None:
         cls_lst.remove(ignore_index)
 
-    jaccard = JaccardIndex(task=task,
+    jaccard = JaccardIndex(task="multiclass",
                            num_classes=num_classes, 
                            average='none',
                            ignore_index=ignore_index,
@@ -142,17 +140,16 @@ def iou(pred, label, batch_size, num_classes, metric_dict, binary=False, ignore_
     elif len(cls_ious) == 1:
         if f"iou_{cls_lst[0]}" in metric_dict.keys():
             metric_dict['iou_' + str(cls_lst[0])].update(cls_ious, batch_size)
-    if not binary:
-        jaccard_nobg = JaccardIndex(task=task,
-                                    num_classes=num_classes,
-                                    average='macro',
-                                    ignore_index=0,
-                                    absent_score=1)
-        metric_match_device(jaccard_nobg, pred, label)
-        iou_nobg = jaccard_nobg(pred, label)
-        metric_dict['iou-nonbg'].update(iou_nobg.item(), batch_size)
+    jaccard_nobg = JaccardIndex(task="multiclass",
+                                num_classes=num_classes,
+                                average='macro',
+                                ignore_index=0,
+                                absent_score=1)
+    metric_match_device(jaccard_nobg, pred, label)
+    iou_nobg = jaccard_nobg(pred, label)
+    metric_dict['iou-nonbg'].update(iou_nobg.item(), batch_size)
 
-    jaccard = JaccardIndex(task=task,
+    jaccard = JaccardIndex(task="multiclass",
                            num_classes=num_classes, 
                            average='macro', 
                            ignore_index=ignore_index,
