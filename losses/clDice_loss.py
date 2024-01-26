@@ -102,7 +102,7 @@ def soft_cldice_score(skel_output: torch.Tensor,
 
 class ClDice(nn.Module):
 
-    def __init__(self, iter_: int=10, alpha: float=0.5, smooth: float=1., ignore_index=None, mode='multiclass'):
+    def __init__(self, iter_: int=30, alpha: float=0.5, smooth: float=1., ignore_index=None, mode='multiclass'):
         super().__init__()
         self.mode = mode
         self.iter = iter_
