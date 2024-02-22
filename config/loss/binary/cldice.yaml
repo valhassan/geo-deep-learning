@@ -1,6 +1,6 @@
 # @package _global_
 loss:
-    _target_: losses.clDice_loss.ClDice
+    _target_: losses.clDice_loss.soft_dice_cldice
     mode: binary
     ignore_index: ${dataset.ignore_index}
     is_binary: True
