@@ -87,20 +87,24 @@ class soft_cldice(nn.Module):
         return cl_dice
 
 class soft_dice_cldice(nn.Module):
-    def __init__(self, iter_=3, alpha=0.5, smooth = 1., exclude_background=False, ignore_index=None):
+    def __init__(self, iter_=3, alpha=0.5, smooth = 1., ignore_index=None):
         super(soft_dice_cldice, self).__init__()
         self.iter = iter_
         self.smooth = smooth
         self.alpha = alpha
         self.soft_skeletonize = SoftSkeletonize(num_iter=self.iter)
-        self.exclude_background = exclude_background
         self.ignore_index = ignore_index
 
     def forward(self, y_pred, y_true):
-        if self.exclude_background:
-            y_true = y_true[:, 1:, :, :]
-            y_pred = y_pred[:, 1:, :, :]
-        print(f"y_true shape: {y_true.shape}, y_pred: {y_pred.shape}")
+        bs = y_true.size(0)
+        h = y_true.size(1)
+        w= y_true.size(2)
+        y_pred = F.logsigmoid(y_pred).exp()
+        y_true = y_true.view(bs, 1, h, w).type_as(y_pred)
+        if self.ignore_index is not None:
+            mask = y_true != self.ignore_index
+            y_pred = y_pred * mask
+            y_true = y_true * mask
         dice = soft_dice(y_true, y_pred)
         skel_pred = self.soft_skeletonize(y_pred)
         skel_true = self.soft_skeletonize(y_true)
