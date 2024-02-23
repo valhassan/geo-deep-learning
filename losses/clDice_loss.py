@@ -87,13 +87,14 @@ class soft_cldice(nn.Module):
         return cl_dice
 
 class soft_dice_cldice(nn.Module):
-    def __init__(self, iter_=3, alpha=0.5, smooth = 1., exclude_background=False):
+    def __init__(self, iter_=3, alpha=0.5, smooth = 1., exclude_background=False, ignore_index=None):
         super(soft_dice_cldice, self).__init__()
         self.iter = iter_
         self.smooth = smooth
         self.alpha = alpha
         self.soft_skeletonize = SoftSkeletonize(num_iter=self.iter)
         self.exclude_background = exclude_background
+        self.ignore_index = ignore_index
 
     def forward(self, y_true, y_pred):
         if self.exclude_background:
