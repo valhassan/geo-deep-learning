@@ -92,7 +92,7 @@ class soft_dice_cldice(nn.Module):
         self.iter = iter_
         self.smooth = smooth
         self.alpha = alpha
-        self.soft_skeletonize = SoftSkeletonize(num_iter=20)
+        self.soft_skeletonize = SoftSkeletonize(num_iter=self.iter)
         self.exclude_background = exclude_background
 
     def forward(self, y_true, y_pred):
