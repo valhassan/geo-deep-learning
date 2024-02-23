@@ -5,4 +5,5 @@ loss:
     alpha: 0.5
     smooth: 1.0
     exclude_background: False
+    ignore_index: ${dataset.ignore_index}
     is_binary: True
