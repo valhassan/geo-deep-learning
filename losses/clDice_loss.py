@@ -96,10 +96,11 @@ class soft_dice_cldice(nn.Module):
         self.exclude_background = exclude_background
         self.ignore_index = ignore_index
 
-    def forward(self, y_true, y_pred):
+    def forward(self, y_pred, y_true):
         if self.exclude_background:
             y_true = y_true[:, 1:, :, :]
             y_pred = y_pred[:, 1:, :, :]
+        print(f"y_true shape: {y_true.shape}, y_pred: {y_pred.shape}")
         dice = soft_dice(y_true, y_pred)
         skel_pred = self.soft_skeletonize(y_pred)
         skel_true = self.soft_skeletonize(y_true)
