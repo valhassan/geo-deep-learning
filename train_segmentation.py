@@ -389,6 +389,7 @@ class Trainer:
                      f"input channels and {self.num_classes} output classes.")
         
         aux_output = False
+        print(f"number_of_channels: {self.num_bands}")
         model = define_model(net_params=self.cfg.model,
                             in_channels=self.num_bands,
                             out_classes=self.num_classes,
