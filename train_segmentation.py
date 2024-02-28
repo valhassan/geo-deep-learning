@@ -203,7 +203,7 @@ class Trainer:
             inputs = data['sat_img']
             labels = data['map_img']
             
-            inputs, labels = self.transforms.train_transform(inputs, labels)
+            inputs, labels = self.transforms.normalize_transform(inputs)
             labels = labels.squeeze(1).long()
 
             # forward
