@@ -141,7 +141,7 @@ class Trainer:
         # AUGUMENTATION PARAMETERS
         mean = get_key_def('mean', cfg['augmentation']['normalization'], default=[1.0] * self.num_bands)
         std = get_key_def('std', cfg['augmentation']['normalization'], default=[1.0] * self.num_bands)
-        self.transforms = Transforms(mean=mean, std=std)
+        self.transforms = Transforms(num_bands=self.num_bands, mean=mean, std=std)
         
         self.vis_params = {'colormap_file': colormap_file, 'heatmaps': heatmaps, 
                            'heatmaps_inf': heatmaps_inf, 'grid': grid,
@@ -202,8 +202,7 @@ class Trainer:
         for batch_index, data in enumerate(tqdm(train_loader, desc=f'Iterating train batches with {device.type}')):
             inputs = data['sat_img']
             labels = data['map_img']
-            
-            inputs = self.transforms.normalize_transform(inputs)
+            inputs, labels = self.transforms.train_transform(inputs, labels)
             labels = labels.squeeze(1).long()
 
             # forward
