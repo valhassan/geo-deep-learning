@@ -22,6 +22,7 @@ logging.getLogger(__name__)
 
 class Transforms:
     def __init__(self,
+                 num_bands: int,
                  mean: List[float],
                  std: List[float]) -> None:
         """Geometric and Photometric Transforms enabled by Kornia
@@ -32,20 +33,24 @@ class Transforms:
         """
         self.mean = torch.Tensor(mean)
         self.std = torch.Tensor(std)
-    
+        self.num_bands = num_bands
+        if self.num_bands == 3:
+            jitter = K.augmentation.RandomPlanckianJitter(mode="blackbody", p=0.4)
+        else:
+            # update kornia to support ColorJiggle on non-3 bands images
+            jitter = K.augmentation.ColorJiggle(brightness=0.1, contrast=0.1, p=0.4)
+            
         self.train_transform = AugmentationSequential(K.augmentation.container.ImageSequential
-                                        (K.augmentation.RandomHorizontalFlip(p=0.5),
-                                        K.augmentation.RandomVerticalFlip(p=0.5), 
-                                        K.augmentation.RandomAffine(degrees=[-45., 45.], p=0.5),
-                                        K.augmentation.RandomResizedCrop(size=(512, 512), p=0.5, 
-                                                                        cropping_mode="resample"),
-                                                                        random_apply=1,
-                                                                        random_apply_weights=[0.5, 0.5, 0.5, 0.5],),
-                                        K.augmentation.RandomPlanckianJitter(mode="blackbody", p=0.4),
-                                        K.augmentation.ColorJiggle(brightness=0.1, contrast=0.1, p=0.3),
-                                        K.augmentation.Normalize(self.mean, self.std, p=1),
-                                        data_keys=["image", "mask"],
-                                        )
+                                                      (K.augmentation.RandomHorizontalFlip(p=0.5),
+                                                       K.augmentation.RandomVerticalFlip(p=0.5),
+                                                       K.augmentation.RandomAffine(degrees=[-45., 45.], p=0.5),
+                                                       K.augmentation.RandomResizedCrop(size=(512, 512), p=0.5, 
+                                                                                        cropping_mode="resample"),
+                                                       random_apply=1,
+                                                       random_apply_weights=[0.5, 0.5, 0.5, 0.5]),
+                                                      jitter,
+                                                      K.augmentation.Normalize(self.mean, self.std, p=1),
+                                                      data_keys=["image", "mask"],)
         self.normalize_transform = AugmentationSequential(K.augmentation.Normalize(self.mean, self.std, p=1),
                                            data_keys=["input"],)
 
