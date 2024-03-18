@@ -35,10 +35,10 @@ class Transforms:
         self.std = torch.Tensor(std)
         self.num_bands = num_bands
         if self.num_bands == 3:
-            jitter = K.augmentation.RandomPlanckianJitter(mode="blackbody", p=0.4)
+            jitter = K.augmentation.RandomPlanckianJitter(mode="blackbody", p=0.5)
         else:
             # update kornia to support ColorJiggle on non-3 bands images
-            jitter = K.augmentation.ColorJiggle(brightness=0.1, contrast=0.1, p=0.4)
+            jitter = K.augmentation.ColorJiggle(brightness=0.1, contrast=0.1, p=0.5)
             
         self.train_transform = AugmentationSequential(K.augmentation.container.ImageSequential
                                                       (K.augmentation.RandomHorizontalFlip(p=0.5),
@@ -49,6 +49,7 @@ class Transforms:
                                                        random_apply=1,
                                                        random_apply_weights=[0.5, 0.5, 0.5, 0.5]),
                                                       jitter,
+                                                      K.augmentation.RandomChannelShuffle(p=0.5),
                                                       K.augmentation.Normalize(self.mean, self.std, p=1),
                                                       data_keys=["image", "mask"],)
         self.normalize_transform = AugmentationSequential(K.augmentation.Normalize(self.mean, self.std, p=1),
