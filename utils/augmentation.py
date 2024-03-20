@@ -38,18 +38,20 @@ class Transforms:
             jitter = K.augmentation.RandomPlanckianJitter(mode="blackbody", p=0.5)
         else:
             # update kornia to support ColorJiggle on non-3 bands images
-            jitter = K.augmentation.ColorJiggle(brightness=0.1, contrast=0.1, p=0.5)
+            jitter = K.augmentation.ColorJiggle(brightness=0.2, contrast=0.2, p=0.5)
+        
+        random_resized_crop_zoom_in = K.augmentation.RandomResizedCrop(size=(512, 512), scale=(1.0, 2.0), p=0.5)
+        random_resized_crop_zoom_out = K.augmentation.RandomResizedCrop(size=(512, 512), scale=(0.5, 1.0), p=0.5)
             
         self.train_transform = AugmentationSequential(K.augmentation.container.ImageSequential
                                                       (K.augmentation.RandomHorizontalFlip(p=0.5),
                                                        K.augmentation.RandomVerticalFlip(p=0.5),
                                                        K.augmentation.RandomAffine(degrees=[-45., 45.], p=0.5),
-                                                       K.augmentation.RandomResizedCrop(size=(512, 512), p=0.5, 
-                                                                                        cropping_mode="resample"),
-                                                       random_apply=1,
-                                                       random_apply_weights=[0.5, 0.5, 0.5, 0.5]),
+                                                       random_resized_crop_zoom_in,
+                                                       random_resized_crop_zoom_out,
+                                                       K.augmentation.RandomChannelShuffle(p=0.5),
+                                                       random_apply=1),
                                                       jitter,
-                                                      K.augmentation.RandomChannelShuffle(p=0.5),
                                                       K.augmentation.Normalize(self.mean, self.std, p=1),
                                                       data_keys=["image", "mask"],)
         self.normalize_transform = AugmentationSequential(K.augmentation.Normalize(self.mean, self.std, p=1),
