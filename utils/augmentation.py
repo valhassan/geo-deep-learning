@@ -49,7 +49,6 @@ class Transforms:
                                                        K.augmentation.RandomAffine(degrees=[-45., 45.], p=0.5),
                                                        random_resized_crop_zoom_in,
                                                        random_resized_crop_zoom_out,
-                                                       K.augmentation.RandomChannelShuffle(p=0.5),
                                                        random_apply=1),
                                                       jitter,
                                                       K.augmentation.Normalize(self.mean, self.std, p=1),
