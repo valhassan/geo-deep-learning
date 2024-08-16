@@ -27,7 +27,7 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         if encoder == "mit_b0":
             in_channels = [32, 64, 160, 256]
-        if encoder == "mit_b0" or "mit_b1":
+        if encoder in ["mit_b0", "mit_b1"]:
             embedding_dim = 256
         assert len(feature_strides) == len(in_channels)
         assert min(feature_strides) == feature_strides[0]
