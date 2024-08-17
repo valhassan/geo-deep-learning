@@ -35,6 +35,7 @@ class Transforms:
         self.std = torch.Tensor(std)
         self.num_bands = num_bands
         if self.num_bands == 3:
+            # issues with device "cuda" and "cpu" in Kornia
             jitter = K.augmentation.RandomPlanckianJitter(mode="blackbody", p=0.5)
         else:
             # update kornia to support ColorJiggle on non-3 bands images
@@ -50,7 +51,6 @@ class Transforms:
                                                        random_resized_crop_zoom_in,
                                                        random_resized_crop_zoom_out,
                                                        random_apply=1),
-                                                      jitter,
                                                       K.augmentation.Normalize(self.mean, self.std, p=1),
                                                       data_keys=["image", "mask"],)
         self.normalize_transform = AugmentationSequential(K.augmentation.Normalize(self.mean, self.std, p=1),
