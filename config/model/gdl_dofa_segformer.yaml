@@ -1,0 +1,4 @@
+# @package _global_
+model:
+  _target_: models.dofa.dofa_segformer.DOFASegFormer
+  encoder: "mit_b5"
