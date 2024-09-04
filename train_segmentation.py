@@ -104,6 +104,7 @@ class Trainer:
         
         # MODEL PARAMETERS
         self.freeze_model_parts = get_key_def('freeze_parts', self.cfg, default=None)
+        self.wavelength = get_key_def('wavelength', self.cfg, default=None)
         self.train_state_dict_path = get_key_def('state_dict_path', self.cfg['training'], 
                                                  default=None, expected_type=str)
         if self.train_state_dict_path and not Path(self.train_state_dict_path).is_file():
@@ -158,7 +159,8 @@ class Trainer:
 
 
     def train_loop(self,
-                   model: torch.nn.Module, 
+                   model: torch.nn.Module,
+                   wavelength: list[float], 
                    train_loader: torch.utils.data.DataLoader, 
                    criterion: torch.nn.modules.loss ,
                    optimizer: torch.optim.Optimizer, 
@@ -207,10 +209,16 @@ class Trainer:
 
             # forward
             optimizer.zero_grad()
-            if aux_output:
-                outputs, outputs_aux = model(inputs)
+            if wavelength is not None:
+                if aux_output:
+                    outputs, outputs_aux = model(inputs, wavelength)
+                else:
+                    outputs = model(inputs, wavelength)
             else:
-                outputs = model(inputs)
+                if aux_output:
+                    outputs, outputs_aux = model(inputs)
+                else:
+                    outputs = model(inputs)
            # added for torchvision models that output an OrderedDict with outputs in 'out' key.
              # More info: https://pytorch.org/hub/pytorch_vision_deeplabv3_resnet101/
             if isinstance(outputs, OrderedDict):
@@ -245,6 +253,24 @@ class Trainer:
             self.fabric.all_reduce(loss, reduce_op="mean")
             train_metrics['loss'].update(loss.item(), batch_size)
             self.fabric.backward(loss)
+            
+            # Monitor gradients
+            # if self.fabric.is_global_zero:
+            #     total_norm = 0.0
+            #     for p in model.parameters():
+            #         if p.grad is not None:
+            #             param_norm = p.grad.data.norm(2)
+            #             total_norm += param_norm.item() ** 2
+                        
+            #             grad_mean = p.grad.data.mean()
+            #             grad_max = p.grad.data.max()
+                        
+            #             logging.info(f"Gradient mean: {grad_mean:.4f}, Gradient max: {grad_max:.4f}")
+            #     total_norm = total_norm ** (1. / 2)
+            #     logging.info(f"Total norm of gradients: {total_norm:.6f}")
+                
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
+            
             optimizer.step()
             if onecycle_scheduler and not plateau_scheduler:
                 lr_scheduler.step()
@@ -259,6 +285,7 @@ class Trainer:
     
     def evaluation_loop(self,
                         model: torch.nn.Module,
+                        wavelength: list[float],
                         eval_loader: torch.utils.data.DataLoader,
                         criterion: torch.nn.modules.loss,
                         epoch: int,
@@ -309,7 +336,10 @@ class Trainer:
                     labels = data['map_img']
                 inputs = self.transforms.normalize_transform(inputs)
                 labels = labels.squeeze(1).long()
-                outputs = model(inputs)
+                if wavelength is not None:
+                    outputs = model(inputs, wavelength)
+                else:
+                    outputs = model(inputs)
                 if isinstance(outputs, OrderedDict):
                     outputs = outputs['out']
 
@@ -388,7 +418,6 @@ class Trainer:
                      f"input channels and {self.num_classes} output classes.")
         
         aux_output = False
-        print(f"number_of_channels: {self.num_bands}")
         model = define_model(net_params=self.cfg.model,
                             in_channels=self.num_bands,
                             out_classes=self.num_classes,
@@ -480,6 +509,7 @@ class Trainer:
         for epoch in range(0, self.num_epochs):
             logging.info(f'\nEpoch {epoch}/{self.num_epochs - 1}\n' + "-" * len(f'Epoch {epoch}/{self.num_epochs - 1}'))
             trn_report = self.train_loop(model=model,
+                                         wavelength=self.wavelength,
                                          train_loader=trn_dataloader,
                                          optimizer=optimizer,
                                          criterion=criterion,
@@ -495,6 +525,7 @@ class Trainer:
                                          )
             
             val_report = self.evaluation_loop(model=model,
+                                              wavelength=self.wavelength,
                                               eval_loader=val_dataloader,
                                               criterion=criterion,
                                               epoch=epoch,
@@ -583,6 +614,7 @@ class Trainer:
 
             if tst_dataloader:
                 tst_report = self.evaluation_loop(model=model,
+                                                  wavelength=self.wavelength,
                                                   eval_loader=tst_dataloader,
                                                   criterion=criterion,
                                                   dataset="tst",
