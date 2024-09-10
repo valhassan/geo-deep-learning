@@ -801,7 +801,7 @@ def train(cfg: DictConfig) -> None:
     if scriptmodel:
         logging.info(f'\nScripting model...')
         model_to_script = ScriptModel(model,
-                                      device=device,
+                                      device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
                                       num_classes=num_classes,
                                       input_shape=(1, num_bands, patches_size, patches_size),
                                       mean=mean,
