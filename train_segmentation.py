@@ -15,6 +15,7 @@ from omegaconf import DictConfig
 from lightning.fabric import Fabric
 from lightning.fabric.strategies.ddp import DDPStrategy
 from utils.augmentation import Transforms
+from utils.script_model import ScriptModel
 from utils.logger import InformationLogger, tsv_line, get_logger, set_tracker
 from utils.metrics import create_metrics_dict, iou
 from utils.train_utils import EarlyStopping, prepare_dataset, prepare_dataloader, freeze_model_parts
@@ -101,6 +102,7 @@ class Trainer:
         # PARAMETERS FOR DATA INPUTS
         self.min_annot_perc = get_key_def('min_annot_perc', self.cfg['tiling'], default=0)
         self.attr_vals = get_key_def("attribute_values", self.cfg['dataset'], default=-1)
+        self.patch_size = get_key_def('patch_size', self.cfg['tiling'], expected_type=int, default=256)
         
         # MODEL PARAMETERS
         self.freeze_model_parts = get_key_def('freeze_parts', self.cfg, default=None)
@@ -123,6 +125,7 @@ class Trainer:
         del self.cfg.loss.is_binary  # prevent exception at instantiation
         self.early_stop_epoch = get_key_def('min_epochs', self.cfg['training'], expected_type=int, 
                                             default=int(self.num_epochs * 0.5))
+        self.script_model = get_key_def('script_model', self.cfg['training'], default=False, expected_type=bool)
         
         # VISUALIZATION PARAMETERS
         self.vis_batch_range = get_key_def('vis_batch_range', self.cfg['visualization'], default=None)
@@ -140,13 +143,13 @@ class Trainer:
         
         
         # AUGUMENTATION PARAMETERS
-        mean = get_key_def('mean', cfg['augmentation']['normalization'], default=[1.0] * self.num_bands)
-        std = get_key_def('std', cfg['augmentation']['normalization'], default=[1.0] * self.num_bands)
-        self.transforms = Transforms(num_bands=self.num_bands, mean=mean, std=std)
+        self.mean = get_key_def('mean', cfg['augmentation']['normalization'], default=[1.0] * self.num_bands)
+        self.std = get_key_def('std', cfg['augmentation']['normalization'], default=[1.0] * self.num_bands)
+        self.transforms = Transforms(num_bands=self.num_bands, mean=self.mean, std=self.std)
         
         self.vis_params = {'colormap_file': colormap_file, 'heatmaps': heatmaps, 
                            'heatmaps_inf': heatmaps_inf, 'grid': grid,
-                           'mean': mean, 'std': std, 'vis_batch_range': self.vis_batch_range, 
+                           'mean': self.mean, 'std': self.std, 'vis_batch_range': self.vis_batch_range, 
                            'vis_at_train': vis_at_train, 'vis_at_eval': vis_at_eval, 
                            'ignore_index': self.dontcare_val, 'inference_input_path': None}
 
@@ -505,6 +508,7 @@ class Trainer:
             best_loss = 999
             last_vis_epoch = 0
             checkpoint_stack = [""]
+            best_checkpoint_filename = None
         self.fabric.barrier()
         for epoch in range(0, self.num_epochs):
             logging.info(f'\nEpoch {epoch}/{self.num_epochs - 1}\n' + "-" * len(f'Epoch {epoch}/{self.num_epochs - 1}'))
@@ -571,6 +575,7 @@ class Trainer:
                     filename = output_path.joinpath(checkpoint_tag)
                     checkpoint_stack.append(checkpoint_tag)
                     best_loss = val_loss
+                    best_checkpoint_filename = checkpoint_tag
                 # More info:
                 # https://pytorch.org/tutorials/beginner/saving_loading_models.html#saving-torch-nn-dataparallel-models
                     state_dict = model.module.state_dict() if self.num_devices > 1 else model.state_dict()
@@ -605,6 +610,24 @@ class Trainer:
                 logging.info(f'Early stopping after patience elapsed!')
                 break
         if self.fabric.is_global_zero:
+            if self.script_model:
+                model_to_script = ScriptModel(model=model, 
+                                              device=torch.device("cuda" if torch.cuda.is_available() else "cpu"), 
+                                              num_classes=self.num_classes,
+                                              input_shape=(1, self.num_bands, self.patch_size, self.patch_size),
+                                              mean=self.mean,
+                                              std=self.std,
+                                              scaled_min=self.scale[0],
+                                              scaled_max=self.scale[1])
+                scripted_model = torch.jit.script(model_to_script)
+                if best_checkpoint_filename is not None:
+                    scripted_model_filename = best_checkpoint_filename.replace('.pth.tar', '_scripted.pt')
+                    scripted_model.save(output_path.joinpath(scripted_model_filename))
+                else:
+                    scripted_model_filename = f'{self.experiment_name}_{self.num_classes}_' \
+                                              f'{"_".join(map(str, self.modalities))}_scripted.pt'
+                    scripted_model.save(output_path.joinpath(scripted_model_filename))
+            
             # load checkpoint model and evaluate it on test dataset.
             # if num_epochs is set to 0, model is loaded to evaluate on test set
             if int(self.cfg['general']['max_epochs']) > 0:
