@@ -410,26 +410,31 @@ class AOI(object):
         stats = {f"band_{index}": {} for index in range(self.raster.count)}
         self.raster_np = self.raster_read()
         for index, band in enumerate(stats.keys()):
-            stats[band] = {"statistics": {}, "histogram": {}}
+            # stats[band] = {"statistics": {}, "histogram": {}}
+            stats[band] = {"statistics": {}}
             stats[band]["statistics"]["minimum"] = self.raster_np[index].min()
             stats[band]["statistics"]["maximum"] = self.raster_np[index].max()
             stats[band]["statistics"]["mean"] = self.raster_np[index].mean()
             stats[band]["statistics"]["median"] = np.median(self.raster_np[index])
             stats[band]["statistics"]["std"] = self.raster_np[index].std()
-            stats[band]["histogram"]["buckets"] = list(np.bincount(self.raster_np.flatten()))
+            # stats[band]["histogram"]["buckets"] = list(np.bincount(self.raster_np.flatten()))
         
         mean_minimum = np.mean([band_stat["statistics"]["minimum"] for band_stat in stats.values()])
         mean_maximum = np.mean([band_stat["statistics"]["maximum"] for band_stat in stats.values()])
         mean_mean = np.mean([band_stat["statistics"]["mean"] for band_stat in stats.values()])
         mean_median = np.mean([band_stat["statistics"]["median"] for band_stat in stats.values()])
         mean_std = np.mean([band_stat["statistics"]["std"] for band_stat in stats.values()])
-        hists_np = [np.asarray(band_stat["histogram"]["buckets"]) for band_stat in stats.values()]
-        mean_hist_np = np.sum(hists_np, axis=0) / len(hists_np)
-        mean_hist = list(mean_hist_np.astype(int))
+        # hists_np = [np.asarray(band_stat["histogram"]["buckets"]) for band_stat in stats.values()]
+        # mean_hist_np = np.sum(hists_np, axis=0) / len(hists_np)
+        # mean_hist = list(mean_hist_np.astype(int))
+        # stats["all"] = {
+        #     "statistics": {"minimum": mean_minimum, "maximum": mean_maximum, "mean": mean_mean,
+        #                    "median": mean_median, "std": mean_std, "low_contrast": self.high_or_low_contrast},
+        #     "histogram": {"buckets": mean_hist}}
+        
         stats["all"] = {
             "statistics": {"minimum": mean_minimum, "maximum": mean_maximum, "mean": mean_mean,
-                           "median": mean_median, "std": mean_std, "low_contrast": self.high_or_low_contrast},
-            "histogram": {"buckets": mean_hist}}
+                           "median": mean_median, "std": mean_std, "low_contrast": self.high_or_low_contrast}}
         # self.close_raster()
         return stats
     
