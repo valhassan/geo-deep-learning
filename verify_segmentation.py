@@ -61,7 +61,7 @@ def verify_per_aoi(
             for cname, stats in aoi_stats.items():
                 aoi_stats_report.update(
                     {f"{cname}_{stat_name}": stat_val for stat_name, stat_val in stats['statistics'].items()})
-                aoi_stats_report.update({f"{cname}_buckets": stats['histogram']['buckets']})
+                # aoi_stats_report.update({f"{cname}_buckets": stats['histogram']['buckets']})
             aoi_dict.update(aoi_stats_report)
 
         if output_raster_plots:
