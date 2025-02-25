@@ -1,3 +1,6 @@
+import os
+os.environ["CPL_VSIL_CURL_TIMEOUT"] = "300"
+
 import functools
 import json
 import gc
