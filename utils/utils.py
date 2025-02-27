@@ -305,43 +305,69 @@ def checkpoint_url_download(url: str):
         raise SystemExit(e)
 
 
-def read_csv(csv_file_name: str) -> Dict:
+def read_csv(csv_file_name: str) -> List[Dict]:
     """
     Open csv file and parse it, returning a list of dictionaries with keys:
-    - "tif": path to a single image
-    - "gpkg": path to a single ground truth file
-    - dataset: (str) "trn" or "tst"
-    - aoi_id: (str) a string id for area of interest
+    - "tif": path to a single image (from image_url column)
+    - "gpkg": path to a single ground truth file (from label_path column)
+    - "split": (str) "trn" or "tst" (from split column)
+    - "aoi_id": (str) a string id for area of interest (from image_name column)
+    
     @param csv_file_name:
         path to csv file containing list of input data with expected columns
-        expected columns (without header): imagery, ground truth, dataset[, aoi id]
+        expected columns (with header): image_url, label_path, split, image_name, etc.
     """
     list_values = []
+    
     with open(csv_file_name, 'r') as f:
-        reader = csv.reader(f)
-        row_lengths_set = set()
+        # Use DictReader to automatically handle headers
+        reader = csv.DictReader(f)
+        
+        # Check if required columns exist
+        required_columns = ['image_url', 'label_path', 'split', 'image_name']
+        missing_columns = [col for col in required_columns if col not in reader.fieldnames]
+        
+        if missing_columns:
+            raise ValueError(f"CSV is missing required columns: {missing_columns}")
+        
         for row in reader:
-            row_lengths_set.update([len(row)])
-            if ";" in row[0]:
+            # Check for semicolon delimiter issue
+            if any(";" in str(value) for value in row.values()):
                 raise TypeError(f"Elements in rows should be delimited with comma, not semicolon.")
-            if not len(row_lengths_set) == 1:
-                raise ValueError(f"Rows in csv should be of same length. Got rows with length: {row_lengths_set}")
-            row = [str(i) or None for i in row]  # replace empty strings to None.
-            row.extend([None] * (4 - len(row)))  # fill row with None values to obtain row of length == 5
- 
-            row[0] = to_absolute_path(row[0]) if not is_url(row[0]) else row[0] # Convert relative paths to absolute with hydra's util to_absolute_path()
+            
+            # Process image_url
+            tif_path = row['image_url']
+            if not tif_path:
+                tif_path = None
+            else:
+                tif_path = to_absolute_path(tif_path) if not is_url(tif_path) else tif_path
+            
+            # Process label_path
+            gpkg_path = row['label_path']
             try:
-                row[1] = str(to_absolute_path(row[1]) if not is_url(row[1]) else row[1])
+                if gpkg_path:
+                    gpkg_path = to_absolute_path(gpkg_path) if not is_url(gpkg_path) else gpkg_path
             except TypeError:
-                row[1] = None
-            # save all values
-            list_values.append(
-                {'tif': str(row[0]), 'gpkg': row[1], 'split': row[2], 'aoi_id': row[3]})
+                gpkg_path = None
+            
+            # Get split value and aoi_id (image_name)
+            split_value = row.get('split')
+            aoi_id = row.get('image_name')
+            
+            # Save values with the expected keys
+            list_values.append({
+                'tif': str(tif_path) if tif_path else None, 
+                'gpkg': str(gpkg_path) if gpkg_path else None, 
+                'split': split_value, 
+                'aoi_id': aoi_id
+            })
+    
     try:
         # Try sorting according to dataset name (i.e. group "train", "val" and "test" rows together)
-        list_values = sorted(list_values, key=lambda k: k['split'])
+        list_values = sorted(list_values, key=lambda k: k['split'] or '')
     except TypeError:
         log.warning('Unable to sort csv rows')
+    
     return list_values
 
 
