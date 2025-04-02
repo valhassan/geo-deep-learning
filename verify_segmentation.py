@@ -151,7 +151,7 @@ def main(cfg: DictConfig) -> None:
                  f'\tCopying first row:\n{data_list[0]}\n')
 
     # Define batch size for processing
-    batch_size = 10  # Adjust based on your dataset and memory constraints
+    batch_size = 2  # Adjust based on your dataset and memory constraints
     
     # Create output files
     outpath_csv = output_report_dir / f"report_info_{csv_file.stem}.csv"
