@@ -19,7 +19,14 @@ dependencies = [
     "colorlog>=6.7.0",
     "PyYAML>=6.0",
     "jsonargparse[signatures]>=4.27.7",
-    ]
+    "earthengine-api>=0.1.400",
+    "geemap>=0.32.0",
+    "geedim",
+    "jupyterlab>=4.0.0",
+    "ipyleaflet>=0.17.0",
+    "ipywidgets>=8.0.0",
+    "torchgeo>=0.6.0",
+]
 
 [project.optional-dependencies]
 cpu = [
@@ -80,6 +87,7 @@ ignore = [
     "EXE002", # ignore missing executable bit on scripts with shebangs
     "ERA001", # ignore commented out code
     "N806",   # ignore uppercase variables
+    "T201",   # ignore print statements (for now)
 ]
 
 # You can limit to specific rule groups instead of ALL:
