@@ -1,0 +1,88 @@
+seed_everything: true
+
+trainer:
+  accelerator: "gpu"
+  devices: 1
+  strategy:
+    class_path: lightning.pytorch.strategies.DDPStrategy
+    init_args:
+      find_unused_parameters: false
+      gradient_as_bucket_view: true
+      static_graph: true
+  # gradient_clip_val: 1.0
+  precision: "16-mixed"
+  sync_batchnorm: true
+  logger:
+    class_path: lightning.pytorch.loggers.mlflow.MLFlowLogger
+    init_args:
+      save_dir: ./logs
+      log_model: false
+      experiment_name: "gdl_regression"
+      run_name: "regression_segformer_mit_b0"
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.EarlyStopping
+      init_args:
+        monitor: "val_loss"
+        mode: "min"
+        verbose: False
+        patience: 20
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        monitor: "val_mae"
+        mode: "min"
+        save_top_k: 1
+        filename: "model-{epoch:02d}-{val_mae:.4f}"
+        # filename: "best_model_epoch_{epoch:02d}"
+  max_epochs: 100
+
+model:
+  class_path: tasks_with_models.regression_segformer.RegressionSegformer
+  init_args:
+    encoder: "mit_b0" # "mit_b0", "mit_b1", "mit_b2", "mit_b3", "mit_b4", "mit_b5"
+    image_size: [256, 256]
+    in_channels: 3
+    weights: imagenet
+    max_samples: 6
+    num_outputs: 1  # For single-value regression (e.g., severity score)
+    freeze_layers: null
+    use_dynamic_encoder: false
+    output_min: null  # Optional: Set min expected value (e.g., 0.0)
+    output_max: null  # Optional: Set max expected value (e.g., 5.0)
+    loss:
+      class_path: torch.nn.MSELoss  # or torch.nn.L1Loss for MAE
+    optimizer:
+      class_path: torch.optim.Adam
+      init_args:
+        lr: 6e-5
+    scheduler:
+      class_path: torch.optim.lr_scheduler.ReduceLROnPlateau
+      init_args:
+        mode: "min"
+        factor: 0.1
+        patience: 10
+        cooldown: 1
+        min_lr: 6e-9
+    scheduler_config:
+      interval: "epoch"
+      frequency: 1
+      monitor: "val_mae"
+    weights_from_checkpoint_path: null
+
+data:
+  class_path: datamodules.geo_datamodule.GeoDataModule
+  init_args:
+    image_root: ./notebooks/alberta_fire_data
+    label_root: ./notebooks/alberta_fire_data
+    batch_size: 32
+    num_workers: 8
+    patch_size: [256, 256]
+    image_glob: "*rgb.tif"
+    label_glob: "*label.tif"
+    sampler_type: "random"
+    train_split: 0.7
+    val_split: 0.15
+    data_type_max: 255
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+ckpt_path: null
