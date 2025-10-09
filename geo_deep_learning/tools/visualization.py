@@ -108,3 +108,95 @@ def visualize_prediction(  # noqa: PLR0913
         plt.savefig(save_path)
     plt.close(fig)
     return fig
+
+
+def visualize_regression(  # noqa: PLR0913
+    image: torch.Tensor,
+    target: torch.Tensor,
+    prediction: torch.Tensor,
+    *,
+    sample_name: str | None = None,
+    save_samples: bool = False,
+    save_path: str | None = None,
+) -> plt.Figure:
+    """
+    Visualize the input image, ground truth, and prediction for regression.
+
+    Args:
+        image (torch.Tensor): Input image tensor of shape (C, H, W)
+        target (torch.Tensor): Ground truth tensor of shape (1, H, W) or (H, W)
+        prediction (torch.Tensor): Predicted tensor of shape (1, H, W) or (H, W)
+        sample_name (str, optional): Name of the sample
+        save_samples (bool, optional): Whether to save the samples
+        save_path (str, optional): Path to save the visualization
+
+    Returns:
+        plt.Figure: The figure containing the visualization
+
+    """
+    image = image.cpu().numpy()
+    target = target.squeeze().cpu().numpy()
+    prediction = prediction.squeeze().cpu().numpy()
+
+    image = np.transpose(image, (1, 2, 0))
+
+    num_channels = image.shape[-1]
+    rgb_channels = 3
+    if num_channels > rgb_channels:
+        image = image[..., :rgb_channels]
+
+    sample_name = "sample" if sample_name is None else sample_name
+
+    # Create the visualization - 1x3 grid
+    plt.close("all")
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    ax_image, ax_target, ax_pred = axes
+
+    # Plot original image
+    ax_image.imshow(image)
+    ax_image.set_title("Input Image", fontsize=14, fontweight="bold")
+    ax_image.axis("off")
+    ax_image.text(
+        0.5,
+        -0.05,
+        f"{sample_name}",
+        transform=ax_image.transAxes,
+        ha="center",
+        va="top",
+        fontsize=10,
+    )
+
+    # Plot ground truth
+    vmin = 0.0
+    vmax = 1.0
+    im_target = ax_target.imshow(target, cmap="viridis", vmin=vmin, vmax=vmax)
+    ax_target.set_title("Ground Truth", fontsize=14, fontweight="bold")
+    ax_target.axis("off")
+    plt.colorbar(im_target, ax=ax_target, fraction=0.046, pad=0.04)
+
+    # Plot prediction
+    im_pred = ax_pred.imshow(prediction, cmap="viridis", vmin=vmin, vmax=vmax)
+    mae = np.abs(target - prediction).mean()
+    ax_pred.set_title(
+        f"Prediction (MAE: {mae:.4f})",
+        fontsize=14,
+        fontweight="bold",
+    )
+    ax_pred.axis("off")
+    plt.colorbar(im_pred, ax=ax_pred, fraction=0.046, pad=0.04)
+
+    plt.tight_layout()
+
+    if save_samples and save_path is not None:
+        plt.imsave(save_path / f"{sample_name}_image.png", image)
+        plt.imsave(save_path / f"{sample_name}_target.png", target, cmap="viridis")
+        plt.imsave(
+            save_path / f"{sample_name}_prediction.png",
+            prediction,
+            cmap="viridis",
+        )
+
+    if save_path:
+        plt.savefig(save_path)
+    plt.close(fig)
+    return fig
