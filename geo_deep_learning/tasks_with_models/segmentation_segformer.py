@@ -73,7 +73,7 @@ class SegmentationSegformer(LightningModule):
         self.class_colors = class_colors
         self.threshold = 0.5
         self.ce_loss = SoftCrossEntropyLoss(smooth_factor=0.1, ignore_index=255)
-        self.aux_weight = {"s4": 0.4, "s3": 0.3, "s2": 0.2}
+        self.aux_weight = {"s4": 0.05, "s3": 0.075, "s2": 0.05}
 
         num_classes = num_classes + 1 if num_classes == 1 else num_classes
         self.iou_metric = MeanIoU(
