@@ -15,11 +15,10 @@ def normalization(
     norm_max: float = 1.0,
 ) -> torch.Tensor:
     """Normalize the input tensor."""
-    input_shape = input_tensor.shape
-    input_tensor = (norm_max - norm_min) * (input_tensor - image_min) / (
+    input_tensor = input_tensor.to(torch.float32)
+    return (norm_max - norm_min) * (input_tensor - image_min) / (
         image_max - image_min
     ) + norm_min
-    return input_tensor.reshape(input_shape)
 
 
 def standardization(
@@ -27,12 +26,20 @@ def standardization(
     mean: torch.Tensor,
     std: torch.Tensor,
 ) -> torch.Tensor:
-    """Standardize the input tensor."""
-    input_shape = input_tensor.shape
-    batch_size, channels = input_tensor.shape[:2]
-    input_tensor = input_tensor.reshape(batch_size, channels, -1)
-    input_tensor = (input_tensor - mean) / std
-    return input_tensor.reshape(input_shape)
+    """
+    Standardize the input tensor.
+
+    Args:
+        input_tensor: Tensor (B, C, H, W)
+        mean: Mean tensor (C, 1, 1)
+        std: Std tensor (C, 1, 1)
+
+    Returns:
+        Standardized tensor
+
+    """
+    input_tensor = input_tensor.to(torch.float32)
+    return (input_tensor - mean) / std
 
 
 def denormalization(
