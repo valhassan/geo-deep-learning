@@ -7,10 +7,11 @@ from typing import Any
 
 import torch
 import torch.nn.functional as fn
-from models.segmentation.base import EncoderMixin
 from timm.layers import DropPath, to_2tuple, trunc_normal_
 from torch import Tensor, nn
 from torch.utils import model_zoo
+
+from geo_deep_learning.models.segmentation.base import EncoderMixin
 
 
 class Mlp(nn.Module):
@@ -846,7 +847,7 @@ class DynamicChannelEmbed(nn.Module):
 
     def forward(self, x: Tensor) -> tuple[Tensor, int, int, Tensor | None]:
         """Forward pass."""
-        batch_size, channels, height, width = x.shape
+        batch_size, channels, _, _ = x.shape
         device = x.device
 
         # Optional spectral bottleneck
