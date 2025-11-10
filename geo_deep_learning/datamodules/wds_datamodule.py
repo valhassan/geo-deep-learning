@@ -1,6 +1,7 @@
 """Multi-sensor data module for webdataset."""
 
 import logging
+import math
 
 import torch
 import webdataset as wds
@@ -35,7 +36,7 @@ class MultiSensorDataModule(LightningDataModule):
             sensor_configs_path: Path to YAML config with sensor configurations
             model_type: Output format - "clay", "dofa", or "unified"
             patch_size: Target patch size for augmentations
-            epoch_size: Number of patches per epoch
+            epoch_size: Number of iterations (batches) per epoch
             batch_size: Batch size for all dataloaders
             num_workers: Number of worker processes
             prefetch_factor: Number of batches to prefetch
@@ -102,21 +103,21 @@ class MultiSensorDataModule(LightningDataModule):
 
     def _calculate_epoch_size(self, total_patches: int, split: str = "trn") -> int:
         """
-        Calculate epoch_size based on total patches and distributed setup.
+        Calculate epoch_size.
 
         Args:
             total_patches: Total number of patches in the dataset
             split: Dataset split (trn, val, tst)
 
         Returns:
-            Number of iterations for the epoch
+            Number of iterations (batches) for the epoch
 
         """
         world_size = 1
-        if torch.distributed.is_initialized() and split == "trn":
+        if torch.distributed.is_initialized():
             world_size = torch.distributed.get_world_size()
-        patches_per_gpu = total_patches // world_size
-        iterations_per_gpu = patches_per_gpu // self.batch_size
+        patches_per_gpu = math.ceil(total_patches / world_size)
+        iterations_per_gpu = math.ceil(patches_per_gpu / self.batch_size)
         logger.info(
             "Auto-calculated epoch_size for %s split: %d iterations "
             "(total_patches=%d, world_size=%d, batch_size=%d, patches_per_gpu=%d)",
@@ -158,12 +159,10 @@ class MultiSensorDataModule(LightningDataModule):
             prefetch_factor=self.prefetch_factor,
             persistent_workers=(self.num_workers > 0),
         )
-        if self.epoch_size:
-            self.train_loader = self.train_loader.with_epoch(self.epoch_size)
-        else:
-            self.train_loader = self.train_loader.with_epoch(
-                self._calculate_epoch_size(self.trn_patch_count, "trn"),
-            )
+        epoch_size = self.epoch_size
+        if epoch_size is None:
+            epoch_size = self._calculate_epoch_size(self.trn_patch_count, "trn")
+        self.train_loader = self.train_loader.with_epoch(epoch_size)
 
     def _setup_val_loader(self) -> None:
         """Set up validation loader."""
@@ -194,6 +193,8 @@ class MultiSensorDataModule(LightningDataModule):
             prefetch_factor=self.prefetch_factor,
             persistent_workers=(self.num_workers > 0),
         )
+        epoch_size = self._calculate_epoch_size(self.val_patch_count, "val")
+        self.val_loader = self.val_loader.with_epoch(epoch_size)
 
     def _setup_test_loader(self) -> None:
         """Set up test loader."""
