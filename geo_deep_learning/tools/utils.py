@@ -104,7 +104,11 @@ def load_weights_from_checkpoint(
 
     """
     logger.info("Loading weights from checkpoint: %s", checkpoint_path)
-    checkpoint = torch.load(checkpoint_path, map_location=map_location)
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location=map_location,
+        weights_only=False,
+    )
     state_dict = checkpoint.get("state_dict", checkpoint)
     state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
     if load_parts is not None:
