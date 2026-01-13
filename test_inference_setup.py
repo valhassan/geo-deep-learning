@@ -11,8 +11,8 @@ from geo_deep_learning.tasks_with_models.segmentation_segformer import (
 )
 from geo_deep_learning.tools.geotiff_inference import (
     GeoTiffSegmentationInference,
+    slide_inference,
 )
-from geo_deep_learning.tools.inference import slide_inference_batched
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ def test_imports() -> bool:
         # Imports are at module level, so just verify they work
         _ = SegmentationSegformer
         _ = GeoTiffSegmentationInference
-        _ = slide_inference_batched
+        _ = slide_inference
     except ImportError:
         logger.exception("✗ Import failed")
         return False
@@ -71,9 +71,9 @@ def test_preprocess_predict() -> bool:
         return True
 
 
-def test_slide_inference_batched() -> bool:
-    """Test that slide_inference_batched function works."""
-    logger.info("Testing slide_inference_batched...")
+def test_slide_inference() -> bool:
+    """Test that slide_inference function works."""
+    logger.info("Testing slide_inference...")
     try:
         # Create a dummy model with predict method
         class DummyModel:
@@ -89,7 +89,7 @@ def test_slide_inference_batched() -> bool:
         inputs = torch.rand(1, 3, 1024, 1024)
 
         # Run slide inference
-        result = slide_inference_batched(
+        result = slide_inference(
             inputs=inputs,
             segmentation_model=model,
             n_output_channels=2,
@@ -102,10 +102,10 @@ def test_slide_inference_batched() -> bool:
             msg = f"Wrong output shape: {result.shape}"
             raise AssertionError(msg)  # noqa: TRY301
     except Exception:
-        logger.exception("✗ slide_inference_batched test failed")
+        logger.exception("✗ slide_inference test failed")
         return False
     else:
-        logger.info("✓ slide_inference_batched works correctly")
+        logger.info("✓ slide_inference works correctly")
         return True
 
 
@@ -138,7 +138,7 @@ def main() -> int:
         test_imports,
         test_model_interface,
         test_preprocess_predict,
-        test_slide_inference_batched,
+        test_slide_inference,
         test_geotiff_inference_class,
     ]
 
