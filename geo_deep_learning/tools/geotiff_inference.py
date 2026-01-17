@@ -170,6 +170,7 @@ class GeoTiffSegmentationInference:
         """Load Lightning model from checkpoint."""
         model = LightningModule.load_from_checkpoint(
             checkpoint_path,
+            weights_from_checkpoint_path=None,
             map_location=self.device,
             weights_only=True,
         )
