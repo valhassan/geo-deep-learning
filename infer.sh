@@ -37,8 +37,10 @@ kill_existing_processes
 show_gpu_status
 
 python $INFERENCE_SCRIPT \
-    --checkpoint /home/valhassa/Projects/geo-deep-learning/data/dynamic_segformer_epoch_1.ckpt \
-    --input /home/valhassa/Projects/geo-deep-learning/data/ON10-053451750140_01_P001-WV02_red-green-blue_clahe25.tif \
+    --checkpoint /home/valhassa/Projects/geo-deep-learning/data/dynamic_segformer_epoch0_0.817.ckpt \
+    --input /home/valhassa/Projects/geo-deep-learning/data/NS2-058651012010_01_P001-WV02_red-green-blue_clahe25.tif \
     --output /home/valhassa/Projects/geo-deep-learning/data/out/pred.tif \
     --mean 0.1014 0.1360 0.1296 \
     --std 0.1102 0.1230 0.1107
+    # --mean 0.1014 0.1360 0.1296 0.2604 \
+    # --std 0.1102 0.1230 0.1107 0.2099
