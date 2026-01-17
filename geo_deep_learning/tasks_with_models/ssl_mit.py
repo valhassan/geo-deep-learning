@@ -7,6 +7,7 @@ import kornia as krn
 import torch
 from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule
+from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
 
 from geo_deep_learning.models.ssl.lejepa_mit import LeJEPAMixTransformer
 from geo_deep_learning.tools.losses.lejepa import LeJEPALoss
@@ -25,6 +26,9 @@ class SSLMixTransformer(LightningModule):
         weights: str | None = None,
         stages: list[int] | None = None,
         projection_head_dim: int = 128,
+        optimizer: OptimizerCallable = torch.optim.Adam,
+        scheduler: LRSchedulerCallable = torch.optim.lr_scheduler.ConstantLR,
+        scheduler_config: dict[str, Any] | None = None,
         *,
         use_dynamic_encoder: bool = False,
         load_parts: str | list[str] | None = None,
@@ -39,6 +43,9 @@ class SSLMixTransformer(LightningModule):
         self.weights = weights
         self.stages = stages
         self.projection_head_dim = projection_head_dim
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.scheduler_config = scheduler_config or {"interval": "epoch"}
         self.use_dynamic_encoder = use_dynamic_encoder
         self.load_parts = load_parts
         self.weights_from_checkpoint_path = weights_from_checkpoint_path
@@ -136,29 +143,9 @@ class SSLMixTransformer(LightningModule):
 
     def configure_optimizers(self) -> dict[str, Any]:
         """Configure optimizers."""
-        optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=5e-4,
-            weight_decay=5e-2,
-        )
-        warmup_epochs = 5
-        max_epochs = self.trainer.max_epochs
-        warmup = torch.optim.lr_scheduler.LinearLR(
-            optimizer,
-            start_factor=0.001,
-            total_iters=warmup_epochs,
-        )
-        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=max_epochs - warmup_epochs,
-            eta_min=5e-7,
-        )
-        scheduler = torch.optim.lr_scheduler.SequentialLR(
-            optimizer,
-            schedulers=[warmup, cosine],
-            milestones=[warmup_epochs],
-        )
-        return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}]
+        optimizer = self.optimizer(self.parameters())
+        scheduler = self.scheduler(optimizer)
+        return [optimizer], [{"scheduler": scheduler, **self.scheduler_config}]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
@@ -215,7 +202,7 @@ class SSLMixTransformer(LightningModule):
             on_step=False,
             on_epoch=True,
             sync_dist=True,
-            rank_zero_only=True,
+            rank_zero_only=False,
         )
         return loss
 
@@ -240,7 +227,7 @@ class SSLMixTransformer(LightningModule):
             on_step=False,
             on_epoch=True,
             sync_dist=True,
-            rank_zero_only=True,
+            rank_zero_only=False,
         )
         return loss
 
@@ -265,5 +252,5 @@ class SSLMixTransformer(LightningModule):
             on_step=False,
             on_epoch=True,
             sync_dist=True,
-            rank_zero_only=True,
+            rank_zero_only=False,
         )
