@@ -68,7 +68,7 @@ def main() -> None:
     parser.add_argument(
         "--overlap",
         type=int,
-        default=171,
+        default=256,
         help="Overlap between tiles (stride = tile_size - overlap)",
     )
     parser.add_argument(
