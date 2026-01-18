@@ -157,10 +157,9 @@ class SSLMixTransformer(LightningModule):
         dataloader_idx: int,  # noqa: ARG002
     ) -> dict[str, Any]:
         """On after batch transfer."""
-        images = batch["image"].to(self.device, non_blocking=True)
-        mean = batch["mean"].to(self.device, non_blocking=True)
-        std = batch["std"].to(self.device, non_blocking=True)
-
+        images = batch["image"]
+        mean = batch["mean"]
+        std = batch["std"]
         if not self.trainer.training:
             batch["views"] = [
                 self._augment(images, mean, std, self.global_crop),
