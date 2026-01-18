@@ -12,7 +12,7 @@ import webdataset as wds
 import yaml
 from pytorch_lightning.utilities import rank_zero_only
 
-from geo_deep_learning.tools.utils import normalization, standardization
+from geo_deep_learning.tools.utils import normalization
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +233,6 @@ class ShardedDataset:
 
         # Apply sensor-specific normalization
         image = normalization(image)
-        image = standardization(image, self.norm_stats["mean"], self.norm_stats["std"])
 
         # Prepare output based on model type
         if self.model_type == "clay":
