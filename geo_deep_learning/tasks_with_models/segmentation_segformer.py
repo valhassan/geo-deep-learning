@@ -17,7 +17,11 @@ from torchmetrics.segmentation import MeanIoU
 from torchmetrics.wrappers import ClasswiseWrapper
 
 from geo_deep_learning.models.segmentation.segformer import SegFormerSegmentationModel
-from geo_deep_learning.tools.utils import denormalization, load_weights_from_checkpoint
+from geo_deep_learning.tools.utils import (
+    denormalization,
+    load_weights_from_checkpoint,
+    standardization,
+)
 from geo_deep_learning.tools.visualization import visualize_prediction
 
 warnings.filterwarnings(
@@ -166,16 +170,19 @@ class SegmentationSegformer(LightningModule):
         dataloader_idx: int,  # noqa: ARG002
     ) -> dict[str, Any]:
         """On after batch transfer."""
-        if not self.trainer.training:
-            return batch
         device = batch["image"].device
-        aug = self._apply_aug()
-        batch_aug = aug({"image": batch["image"], "mask": batch["mask"]})
-        for key in ["image", "mask"]:
-            if key in batch_aug and batch_aug[key].device != device:
-                batch[key] = batch_aug[key].to(device, non_blocking=True)
-            elif key in batch_aug:
-                batch[key] = batch_aug[key]
+
+        if self.trainer.training:
+            aug = self._apply_aug()
+            batch_aug = aug({"image": batch["image"], "mask": batch["mask"]})
+            for key in ["image", "mask"]:
+                tensor = batch_aug[key]
+                batch[key] = (
+                    tensor
+                    if tensor.device == device
+                    else tensor.to(device, non_blocking=True)
+                )
+        batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
         return batch
 
     def training_step(
