@@ -20,6 +20,7 @@ from geo_deep_learning.models.segmentation.segformer import SegFormerSegmentatio
 from geo_deep_learning.tools.utils import (
     denormalization,
     load_weights_from_checkpoint,
+    normalization,
     standardization,
 )
 from geo_deep_learning.tools.visualization import visualize_prediction
@@ -163,6 +164,76 @@ class SegmentationSegformer(LightningModule):
     def forward(self, image: Tensor) -> Tensor:
         """Forward pass."""
         return self.model(image)
+
+    def preprocess(
+        self,
+        x: torch.Tensor,
+        mean: list[float] | torch.Tensor,
+        std: list[float] | torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Apply normalization and standardization for inference.
+
+        Args:
+            x: Raw input tensor (B, C, H, W), values in [0, 255] range
+            mean: Mean values for standardization (per channel)
+            std: Std values for standardization (per channel)
+
+        Returns:
+            Preprocessed tensor ready for model forward pass
+
+        """
+        # Normalize to [0, 1]
+        x = normalization(x, image_min=0, image_max=255, norm_min=0.0, norm_max=1.0)
+
+        # Convert mean/std to tensors if needed
+        if not isinstance(mean, torch.Tensor):
+            mean = torch.tensor(mean, dtype=torch.float32, device=x.device)
+        if not isinstance(std, torch.Tensor):
+            std = torch.tensor(std, dtype=torch.float32, device=x.device)
+
+        # Ensure correct shape (C, 1, 1)
+        if mean.dim() == 1:
+            mean = mean.view(-1, 1, 1)
+        if std.dim() == 1:
+            std = std.view(-1, 1, 1)
+
+        return standardization(x, mean, std)
+
+    def predict(
+        self,
+        x: torch.Tensor,
+        rescale_to: tuple[int, int] | None = None,
+    ) -> torch.Tensor:
+        """
+        Inference forward pass (expects preprocessed input).
+
+        Args:
+            x: Preprocessed input tensor (B, C, H, W)
+            rescale_to: Optional output size to rescale predictions to (H, W)
+
+        Returns:
+            Predictions (B, C, H, W) - probabilities for each class
+
+        """
+        outputs = self(x)
+
+        # Get logits from model output
+        logits = outputs.out
+
+        # Rescale if requested
+        if rescale_to is not None:
+            logits = torch.nn.functional.interpolate(
+                logits,
+                size=rescale_to,
+                mode="bilinear",
+                align_corners=False,
+            )
+
+        # Apply activation based on num_classes
+        if self.num_classes == 1:
+            return logits.sigmoid()
+        return logits.softmax(dim=1)
 
     def on_after_batch_transfer(
         self,

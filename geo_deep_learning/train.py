@@ -2,7 +2,6 @@
 
 import logging
 
-from lightning.pytorch import seed_everything
 from lightning.pytorch.cli import ArgsType, LightningCLI
 
 from configs import logging_config  # noqa: F401
@@ -13,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 def main(args: ArgsType = None) -> None:
     """Run the main training pipeline."""
-    seed_everything(42, workers=True)
     cli = LightningCLI(
         save_config_callback=LoggerSaveConfigCallback,
         save_config_kwargs={"overwrite": True},

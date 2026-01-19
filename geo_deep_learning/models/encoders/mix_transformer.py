@@ -11,7 +11,36 @@ from timm.layers import DropPath, to_2tuple, trunc_normal_
 from torch import Tensor, nn
 from torch.utils import model_zoo
 
-from geo_deep_learning.models.segmentation.base import EncoderMixin
+from geo_deep_learning.models.utils import patch_first_conv
+
+
+class EncoderMixin:
+    """Encoder mixin."""
+
+    _output_stride = 32
+
+    @property
+    def out_channels(self) -> list[int]:
+        """Return channels dimensions for each tensor of forward output of encoder."""
+        return self._out_channels[: self._depth + 1]
+
+    @property
+    def output_stride(self) -> int:
+        """Return output stride."""
+        return min(self._output_stride, 2**self._depth)
+
+    def set_in_channels(self, in_channels: int, *, pretrained: bool = True) -> None:
+        """Change first convolution channels."""
+        expected_in_channels = 3
+        if in_channels == expected_in_channels:
+            return
+
+        self._in_channels = in_channels
+        expected_out_channels = 3
+        if self._out_channels[0] == expected_out_channels:
+            self._out_channels = (in_channels, *self._out_channels[1:])
+
+        patch_first_conv(model=self, new_in_channels=in_channels, pretrained=pretrained)
 
 
 class Mlp(nn.Module):
@@ -914,7 +943,7 @@ class DynamicChannelEmbed(nn.Module):
         return tokens, h_out, w_out
 
 
-class DynamicMixTransformer(nn.Module):
+class DynamicMixTransformer(nn.Module, EncoderMixin):
     """Dynamic MixVisionTransformer, handles arbitrary channel counts."""
 
     def __init__(
@@ -930,6 +959,9 @@ class DynamicMixTransformer(nn.Module):
             in_channels=in_channels,
             weights=weights,
         )
+        self._out_channels = base_encoder._out_channels  # noqa: SLF001
+        self._depth = base_encoder._depth  # noqa: SLF001
+
         self.dynamic_patch_embed1 = DynamicChannelEmbed(
             patch_size=7,
             stride=4,
@@ -949,6 +981,9 @@ class DynamicMixTransformer(nn.Module):
         self.norm2 = base_encoder.norm2
         self.norm3 = base_encoder.norm3
         self.norm4 = base_encoder.norm4
+
+    def set_in_channels(self, in_channels: int) -> None:
+        """Set in channels."""
 
     def forward_features(self, x: Tensor) -> list[Tensor]:
         """Forward features pass."""
