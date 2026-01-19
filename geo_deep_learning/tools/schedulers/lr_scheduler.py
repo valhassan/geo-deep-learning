@@ -170,6 +170,7 @@ def linear_warmup_decay(
     *,
     cosine: bool = True,
     linear: bool = False,
+    min_lr_ratio: float = 0.01,
 ) -> Callable[[int], float]:
     """Create a learning rate scheduler with linear warmup and optional decay."""
     if linear and cosine:
@@ -177,22 +178,19 @@ def linear_warmup_decay(
         raise ValueError(msg)
 
     def fn(step: int) -> float:
-        """Calculate learning rate multiplier for given step."""
         if step < warmup_steps:
-            return float(step) / float(max(1, warmup_steps))
+            base = float(step) / float(max(1, warmup_steps))
+        elif not (cosine or linear):
+            base = 1.0
+        else:
+            progress = float(step - warmup_steps) / float(
+                max(1, total_steps - warmup_steps),
+            )
+            if cosine:
+                base = 0.5 * (1.0 + math.cos(math.pi * progress))
+            else:
+                base = 1.0 - progress
 
-        if not (cosine or linear):
-            # no decay
-            return 1.0
-
-        progress = float(step - warmup_steps) / float(
-            max(1, total_steps - warmup_steps),
-        )
-        if cosine:
-            # cosine decay
-            return 0.5 * (1.0 + math.cos(math.pi * progress))
-
-        # linear decay
-        return 1.0 - progress
+        return min_lr_ratio + (1.0 - min_lr_ratio) * base
 
     return fn
