@@ -12,7 +12,7 @@ import webdataset as wds
 import yaml
 from pytorch_lightning.utilities import rank_zero_only
 
-from geo_deep_learning.tools.utils import normalization
+from geo_deep_learning.tools.utils import manage_bands, normalization
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +116,7 @@ def create_sensor_datasets(
                     normalization_stats_path=config["stats_path"],
                     split=split,
                     wavelength_keys=config.get("wavelength_keys"),
+                    band_indices=config.get("band_indices"),
                     **common_kwargs,
                 )
 
@@ -159,6 +160,7 @@ class ShardedDataset:
         seed: int = 42,
         epoch_size: int | None = None,
         wavelength_keys: list[str] | None = None,
+        band_indices: list[int] | None = None,
     ) -> None:
         """
         Initialize MultiSensorWebDataset.
@@ -176,6 +178,7 @@ class ShardedDataset:
             seed: Random seed for shuffling
             epoch_size: Size of epoch (for infinite streaming)
             wavelength_keys: Optional list of metadata keys for wavelengths
+            band_indices: Optional list of band indices to select from the image
 
         """
         super().__init__()
@@ -189,6 +192,7 @@ class ShardedDataset:
         self.shuffle_buffer = shuffle_buffer
         self.shardshuffle = shardshuffle
         self.patch_count = patch_count
+        self.band_indices = band_indices
         self.norm_stats = self._load_normalization_stats(normalization_stats_path)
         self.wavelength_keys = wavelength_keys
         self.wavelengths_cache = {}
@@ -206,10 +210,19 @@ class ShardedDataset:
         )
         std = torch.tensor(stats["std"], dtype=torch.float32).div(255.0).view(-1, 1, 1)
 
+        # Filter mean/std by band_indices if specified
+        if self.band_indices is not None:
+            indices = torch.LongTensor(self.band_indices)
+            mean = torch.index_select(mean, dim=0, index=indices)
+            std = torch.index_select(std, dim=0, index=indices)
+            band_count = len(self.band_indices)
+        else:
+            band_count = stats["band_count"]
+
         return {
             "mean": mean,
             "std": std,
-            "band_count": stats["band_count"],
+            "band_count": band_count,
             "patch_count": stats["patch_count"],
             "dtype": stats["dtype"],
         }
@@ -230,6 +243,9 @@ class ShardedDataset:
         image = torch.from_numpy(sample["image_patch.npy"]).float()
         label = torch.from_numpy(sample["label_patch.npy"]).long()
         metadata = sample["metadata.json"]
+
+        # Select bands before normalization
+        image = manage_bands(image, self.band_indices)
 
         # Apply sensor-specific normalization
         image = normalization(image)
@@ -367,6 +383,11 @@ class ShardedDataset:
             "blue_wavelength",
             "nir_wavelength",
         ]
+
+        # Filter wavelength_keys by band_indices if specified
+        if self.band_indices is not None:
+            wavelengths_keys = [wavelengths_keys[i] for i in self.band_indices]
+
         try:
             meta = metadata["metadata"]
 
