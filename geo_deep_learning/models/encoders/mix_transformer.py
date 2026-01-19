@@ -769,8 +769,8 @@ class DynamicChannelEmbed(nn.Module):
         embed_dim: int = 64,  # b0=32, b1-b5 = 64
         hidden_dim: int = 128,
         num_heads: int = 4,  # b0=2, b1-b5 = 4
-        topk_rel: int = 2,  # keep max to 4 for >= 8 channels
         bottleneck_channels: int = 0,
+        drop: float = 0.1,
     ) -> None:
         """Initialize DynamicChannelEmbed."""
         super().__init__()
@@ -779,7 +779,6 @@ class DynamicChannelEmbed(nn.Module):
         self.embed_dim = embed_dim
         self.pos_dim = hidden_dim
         self.num_heads = num_heads
-        self.topk_rel = topk_rel
         self.bottleneck_channels = bottleneck_channels
 
         self.weight_gen = nn.Sequential(
@@ -814,15 +813,6 @@ class DynamicChannelEmbed(nn.Module):
         self.k_proj = nn.Linear(embed_dim, embed_dim, bias=True)
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=True)
 
-        # Sparse relation scorer (top-k)
-        self.channel_relation_mlp = nn.Sequential(
-            nn.Linear(embed_dim * 2, embed_dim),
-            nn.ReLU(),
-            nn.Linear(embed_dim, embed_dim // 2),
-            nn.ReLU(),
-            nn.Linear(embed_dim // 2, 1),
-        )
-
         # Stabilized gates
         self.pre_gate_norm = nn.LayerNorm(embed_dim)
         self.aggregation_gate = nn.Sequential(
@@ -833,6 +823,7 @@ class DynamicChannelEmbed(nn.Module):
         )
 
         self.proj = nn.Linear(embed_dim, embed_dim)
+        self.drop = nn.Dropout(drop)
         self.norm = nn.LayerNorm(embed_dim)
 
     def get_position_encoding(self, n_channels: int, device: torch.device) -> Tensor:
@@ -845,7 +836,7 @@ class DynamicChannelEmbed(nn.Module):
         pos_enc[:, 1::2] = torch.cos(positions.unsqueeze(1) * inv_freq)
         return pos_enc
 
-    def forward(self, x: Tensor) -> tuple[Tensor, int, int, Tensor | None]:
+    def forward(self, x: Tensor) -> tuple[Tensor, int, int]:
         """Forward pass."""
         batch_size, channels, _, _ = x.shape
         device = x.device
@@ -901,41 +892,12 @@ class DynamicChannelEmbed(nn.Module):
         attn_out = (
             attn_out.transpose(1, 2).contiguous().view(batch_size, channels_eff, d)
         )  # [B,C,d]
-
-        # Optional attention weights (for top-k & debugging)
-        with torch.no_grad():
-            scores = (q @ k.transpose(-2, -1)) / (d_head**0.5)  # [B,h,C,C]
-            attn_weights = scores.softmax(dim=-1).mean(dim=1)  # [B,C,C]
-
-        # Edge-sparse relation MLP (top-k)
-        relation_scores: Tensor | None = None
-        if self.topk_rel and self.topk_rel > 0 and channels_eff > 1:
-            k_top = min(self.topk_rel, channels_eff - 1)
-            topk_idx = torch.topk(attn_weights, k=k_top, dim=-1).indices  # [B,C,k]
-            src_rep = attn_out.unsqueeze(2).expand(
-                batch_size,
-                channels_eff,
-                k_top,
-                d,
-            )  # [B,C,k,d]
-            nbr_rep = torch.gather(
-                attn_out.unsqueeze(1).expand(batch_size, channels_eff, channels_eff, d),
-                dim=2,
-                index=topk_idx.unsqueeze(-1).expand(batch_size, channels_eff, k_top, d),
-            )  # [B,C,k,d]
-            pair_feat = torch.cat([src_rep, nbr_rep], dim=-1)  # [B,C,k,2d]
-            pair_feat = pair_feat.reshape(batch_size * channels_eff * k_top, 2 * d)
-            relation_scores = self.channel_relation_mlp(pair_feat).reshape(
-                batch_size,
-                channels_eff,
-                k_top,
-                1,
-            )  # [B,C,k,1]
+        attn_out = self.drop(attn_out)
 
         # Stabilized gating
         gated = self.pre_gate_norm(attn_out)  # [B,C,d]
         gate = self.aggregation_gate(gated).squeeze(-1)  # [B,C]
-        gate = 0.5 + 0.5 * gate  # in [0.5, 1.0]
+        # gate = 0.5 + 0.5 * gate  # in [0.5, 1.0]
 
         # Aggregate spatial features
         out_map = torch.zeros(batch_size, embed_dim, h_out, w_out, device=device)
@@ -946,9 +908,10 @@ class DynamicChannelEmbed(nn.Module):
         # Tokens
         tokens = out_map.flatten(2).transpose(1, 2)  # [B,H'*W',d]
         tokens = self.proj(tokens)
+        tokens = self.drop(tokens)
         tokens = self.norm(tokens)
 
-        return tokens, h_out, w_out, relation_scores
+        return tokens, h_out, w_out
 
 
 class DynamicMixTransformer(nn.Module):
@@ -991,7 +954,7 @@ class DynamicMixTransformer(nn.Module):
         """Forward features pass."""
         batch_size = x.shape[0]
         outs = []
-        x, h, w, _ = self.dynamic_patch_embed1(x)
+        x, h, w = self.dynamic_patch_embed1(x)
         for blk in self.block1:
             x = blk(x, h, w)
         x = self.norm1(x)
