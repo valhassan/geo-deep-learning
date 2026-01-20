@@ -1,7 +1,6 @@
 """Segmentation UNetPlus model."""
 
 import logging
-import math
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -13,11 +12,17 @@ import torch
 from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
-from tools.utils import denormalization, load_weights_from_checkpoint
-from tools.visualization import visualize_prediction
 from torch import Tensor
 from torchmetrics.segmentation import MeanIoU
 from torchmetrics.wrappers import ClasswiseWrapper
+
+from geo_deep_learning.tools.utils import (
+    denormalization,
+    load_weights_from_checkpoint,
+    normalization,
+    standardization,
+)
+from geo_deep_learning.tools.visualization import visualize_prediction
 
 # Ignore warning about default grid_sample and affine_grid behavior triggered by kornia
 warnings.filterwarnings(
@@ -143,51 +148,7 @@ class SegmentationUnetPlus(LightningModule):
     def configure_optimizers(self) -> list[list[dict[str, Any]]]:
         """Configure optimizers."""
         optimizer = self.optimizer(self.parameters())
-        if (
-            self.hparams["scheduler"]["class_path"]
-            == "torch.optim.lr_scheduler.OneCycleLR"
-        ):
-            max_lr = (
-                self.hparams.get("scheduler", {}).get("init_args", {}).get("max_lr")
-            )
-            stepping_batches = self.trainer.estimated_stepping_batches
-            if stepping_batches > -1:
-                scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                    optimizer,
-                    max_lr=max_lr,
-                    total_steps=stepping_batches,
-                )
-            elif (
-                stepping_batches == -1
-                and getattr(self.trainer.datamodule, "epoch_size", None) is not None
-            ):
-                batch_size = self.trainer.datamodule.batch_size
-                epoch_size = self.trainer.datamodule.epoch_size
-                accumulate_grad_batches = self.trainer.accumulate_grad_batches
-                max_epochs = self.trainer.max_epochs
-                steps_per_epoch = math.ceil(
-                    epoch_size / (batch_size * accumulate_grad_batches),
-                )
-                buffer_steps = int(steps_per_epoch * accumulate_grad_batches)
-                scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                    optimizer,
-                    max_lr=max_lr,
-                    steps_per_epoch=steps_per_epoch + buffer_steps,
-                    epochs=max_epochs,
-                )
-            else:
-                stepping_batches = (
-                    self.hparams.get("scheduler", {})
-                    .get("init_args", {})
-                    .get("total_steps")
-                )
-                scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                    optimizer,
-                    max_lr=max_lr,
-                    total_steps=stepping_batches,
-                )
-        else:
-            scheduler = self.scheduler(optimizer)
+        scheduler = self.scheduler(optimizer)
 
         return [optimizer], [{"scheduler": scheduler, **self.scheduler_config}]
 
@@ -195,16 +156,95 @@ class SegmentationUnetPlus(LightningModule):
         """Forward pass."""
         return self.model(image)
 
-    def on_before_batch_transfer(
+    def preprocess(
+        self,
+        x: torch.Tensor,
+        mean: list[float] | torch.Tensor,
+        std: list[float] | torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Apply normalization and standardization for inference.
+
+        Args:
+            x: Raw input tensor (B, C, H, W), values in [0, 255] range
+            mean: Mean values for standardization (per channel)
+            std: Std values for standardization (per channel)
+
+        Returns:
+            Preprocessed tensor ready for model forward pass
+
+        """
+        # Normalize to [0, 1]
+        x = normalization(x, image_min=0, image_max=255, norm_min=0.0, norm_max=1.0)
+
+        # Convert mean/std to tensors if needed
+        if not isinstance(mean, torch.Tensor):
+            mean = torch.tensor(mean, dtype=torch.float32, device=x.device)
+        if not isinstance(std, torch.Tensor):
+            std = torch.tensor(std, dtype=torch.float32, device=x.device)
+
+        # Ensure correct shape (C, 1, 1)
+        if mean.dim() == 1:
+            mean = mean.view(-1, 1, 1)
+        if std.dim() == 1:
+            std = std.view(-1, 1, 1)
+
+        return standardization(x, mean, std)
+
+    def predict(
+        self,
+        x: torch.Tensor,
+        rescale_to: tuple[int, int] | None = None,
+    ) -> torch.Tensor:
+        """
+        Inference forward pass (expects preprocessed input).
+
+        Args:
+            x: Preprocessed input tensor (B, C, H, W)
+            rescale_to: Optional output size to rescale predictions to (H, W)
+
+        Returns:
+            Predictions (B, C, H, W) - probabilities for each class
+
+        """
+        outputs = self(x)
+
+        # Get logits from model output
+        logits = outputs.out
+
+        # Rescale if requested
+        if rescale_to is not None:
+            logits = torch.nn.functional.interpolate(
+                logits,
+                size=rescale_to,
+                mode="bilinear",
+                align_corners=False,
+            )
+
+        # Apply activation based on num_classes
+        if self.num_classes == 1:
+            return logits.sigmoid()
+        return logits.softmax(dim=1)
+
+    def on_after_batch_transfer(
         self,
         batch: dict[str, Any],
         dataloader_idx: int,  # noqa: ARG002
     ) -> dict[str, Any]:
-        """On before batch transfer."""
+        """On after batch transfer."""
+        device = batch["image"].device
+
         if self.trainer.training:
             aug = self._apply_aug()
-            transformed = aug({"image": batch["image"], "mask": batch["mask"]})
-            batch.update(transformed)
+            batch_aug = aug({"image": batch["image"], "mask": batch["mask"]})
+            for key in ["image", "mask"]:
+                tensor = batch_aug[key]
+                batch[key] = (
+                    tensor
+                    if tensor.device == device
+                    else tensor.to(device, non_blocking=True)
+                )
+        batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
         return batch
 
     def training_step(
@@ -229,7 +269,7 @@ class SegmentationUnetPlus(LightningModule):
             on_step=False,
             on_epoch=True,
             sync_dist=True,
-            rank_zero_only=True,
+            rank_zero_only=False,
         )
 
         return loss
@@ -254,7 +294,7 @@ class SegmentationUnetPlus(LightningModule):
             on_step=False,
             on_epoch=True,
             sync_dist=True,
-            rank_zero_only=True,
+            rank_zero_only=False,
         )
         if self.num_classes == 1:
             y_hat = (y_hat.sigmoid().squeeze(1) > self.threshold).long()
@@ -302,7 +342,9 @@ class SegmentationUnetPlus(LightningModule):
             prog_bar=False,
             logger=True,
             on_step=False,
-            rank_zero_only=True,
+            on_epoch=True,
+            sync_dist=True,
+            rank_zero_only=False,
         )
 
     def _log_visualizations(  # noqa: PLR0913
@@ -316,7 +358,7 @@ class SegmentationUnetPlus(LightningModule):
         epoch_suffix: bool = True,
     ) -> None:
         """
-        SegFormer-specific log visualizations.
+        UNetPlus-specific log visualizations.
 
         Args:
             trainer: Lightning trainer
@@ -369,6 +411,6 @@ class SegmentationUnetPlus(LightningModule):
                     run_id=trainer.logger.run_id,
                 )
         except Exception:
-            logger.exception("Error in SegFormer visualization")
+            logger.exception("Error in UNetPlus visualization")
         else:
             return num_samples
