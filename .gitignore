@@ -4,3 +4,6 @@
 *uv.lock
 *experiments*
 *geo_deep_learning/notebooks*
+*.egg-info/
+dist/
+build/
