@@ -2,8 +2,6 @@
 
 import math
 import warnings
-from collections.abc import Callable
-
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 
@@ -163,34 +161,39 @@ class LinearWarmupCosineAnnealingLR(_LRScheduler):
         ]
 
 
-# warmup + decay as a function
-def linear_warmup_decay(
-    warmup_steps: int,
-    total_steps: int,
-    *,
-    cosine: bool = True,
-    linear: bool = False,
-    min_lr_ratio: float = 0.01,
-) -> Callable[[int], float]:
-    """Create a learning rate scheduler with linear warmup and optional decay."""
-    if linear and cosine:
-        msg = "linear and cosine cannot be True at the same time"
-        raise ValueError(msg)
+class linear_warmup_decay:
+    """LR multiplier with linear warmup and cosine/linear decay. For use with LambdaLR."""
 
-    def fn(step: int) -> float:
-        if step < warmup_steps:
-            base = float(step) / float(max(1, warmup_steps))
-        elif not (cosine or linear):
+    def __init__(
+        self,
+        warmup_steps: int,
+        total_steps: int,
+        *,
+        cosine: bool = True,
+        linear: bool = False,
+        min_lr_ratio: float = 0.01,
+    ) -> None:
+        if linear and cosine:
+            msg = "linear and cosine cannot be True at the same time"
+            raise ValueError(msg)
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self.cosine = cosine
+        self.linear = linear
+        self.min_lr_ratio = min_lr_ratio
+
+    def __call__(self, step: int) -> float:
+        if step < self.warmup_steps:
+            base = float(step) / float(max(1, self.warmup_steps))
+        elif not (self.cosine or self.linear):
             base = 1.0
         else:
-            progress = float(step - warmup_steps) / float(
-                max(1, total_steps - warmup_steps),
+            progress = float(step - self.warmup_steps) / float(
+                max(1, self.total_steps - self.warmup_steps),
             )
-            if cosine:
+            if self.cosine:
                 base = 0.5 * (1.0 + math.cos(math.pi * progress))
             else:
                 base = 1.0 - progress
 
-        return min_lr_ratio + (1.0 - min_lr_ratio) * base
-
-    return fn
+        return self.min_lr_ratio + (1.0 - self.min_lr_ratio) * base
