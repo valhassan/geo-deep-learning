@@ -217,18 +217,21 @@ class ShardedDataset:
         with Path(stats_path).open() as f:
             data = json.load(f)
         stats = data["statistics"][self.sensor_name]
-        mean = (
-            torch.tensor(stats["mean"], dtype=torch.float32)
-            .div(255.0)
-            .view(-1, 1, 1)
-        )
-        std = (
-            torch.tensor(stats["std"], dtype=torch.float32)
-            .div(255.0)
-            .view(-1, 1, 1)
-        )
-        if mean is not None and std is not None:
+        if mean is None:
+            mean = (
+                torch.tensor(stats["mean"], dtype=torch.float32)
+                .div(255.0)
+                .view(-1, 1, 1)
+            )
+        else:
             mean = torch.tensor(mean, dtype=torch.float32).view(-1, 1, 1)
+        if std is None:
+            std = (
+                torch.tensor(stats["std"], dtype=torch.float32)
+                .div(255.0)
+                .view(-1, 1, 1)
+            )
+        else:
             std = torch.tensor(std, dtype=torch.float32).view(-1, 1, 1)
 
         # Filter mean/std by band_indices if specified
