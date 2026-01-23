@@ -124,7 +124,9 @@ def load_weights_from_checkpoint(
         map_location=map_location,
         weights_only=False,
     )
-    state_dict = checkpoint.get("state_dict", checkpoint)
+    state_dict = (
+        checkpoint.get("state_dict") or checkpoint.get("model_state_dict") or checkpoint
+    )
     state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
 
     if load_parts is None:
