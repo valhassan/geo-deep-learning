@@ -27,7 +27,7 @@ class Decoder(nn.Module):
         encoder: str = "mit_b2",
         in_channels: list[int] | None = None,
         feature_strides: list[int] | None = None,
-        embedding_dim: int = 768,
+        embedding_dim: int | None = None,
         num_classes: int = 1,
         dropout_ratio: float = 0.1,
     ) -> None:
@@ -36,12 +36,11 @@ class Decoder(nn.Module):
         if feature_strides is None:
             feature_strides = [4, 8, 16, 32]
         if in_channels is None:
-            in_channels = [64, 128, 320, 512]
-        if encoder == "mit_b0":
-            in_channels = [32, 64, 160, 256]
-            embedding_dim = 256
-        elif encoder == "mit_b1":
-            embedding_dim = 256
+            in_channels = (
+                [32, 64, 160, 256] if encoder == "mit_b0" else [64, 128, 320, 512]
+            )
+        if embedding_dim is None:
+            embedding_dim = 256 if encoder in ("mit_b0", "mit_b1") else 768
         if len(feature_strides) != len(in_channels):
             msg = "feature_strides and in_channels must have the same length"
             raise ValueError(msg)
@@ -60,14 +59,6 @@ class Decoder(nn.Module):
         self.linear_c2 = MLP(input_dim=c2_in_channels, embed_dim=embedding_dim)
         self.linear_c1 = MLP(input_dim=c1_in_channels, embed_dim=embedding_dim)
 
-        self.aux_heads = nn.ModuleDict(
-            {
-                "s4": nn.Conv2d(embedding_dim, self.num_classes, 1),
-                "s3": nn.Conv2d(embedding_dim, self.num_classes, 1),
-                "s2": nn.Conv2d(embedding_dim, self.num_classes, 1),
-            },
-        )
-
         self.linear_fuse = nn.Sequential(
             nn.Conv2d(
                 in_channels=embedding_dim * 4,
@@ -85,7 +76,7 @@ class Decoder(nn.Module):
     def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
         """Forward pass."""
         c1, c2, c3, c4 = x
-        n, _, h, w = c4.shape
+        n, _, _, _ = c4.shape
 
         _c4 = (
             self.linear_c4(c4)
@@ -132,14 +123,7 @@ class Decoder(nn.Module):
             .reshape(n, -1, c1.shape[2], c1.shape[3])
             .contiguous()
         )
-        aux = None
-        if self.training:
-            aux = {
-                "s4": self.aux_heads["s4"](_c4),
-                "s3": self.aux_heads["s3"](_c3),
-                "s2": self.aux_heads["s2"](_c2),
-            }
         _c = self.linear_fuse(torch.cat([_c4, _c3, _c2, _c1], dim=1))
         x = self.dropout(_c)
         out = self.linear_pred(x)
-        return out, aux
+        return out, None
