@@ -159,6 +159,8 @@ class ShardedDataset:
         shardshuffle: int | None = None,
         seed: int = 42,
         epoch_size: int | None = None,
+        mean: list[float] | None = None,
+        std: list[float] | None = None,
         wavelength_keys: list[str] | None = None,
         band_indices: list[int] | None = None,
     ) -> None:
@@ -177,6 +179,8 @@ class ShardedDataset:
             shardshuffle: Number of shards to shuffle
             seed: Random seed for shuffling
             epoch_size: Size of epoch (for infinite streaming)
+            mean: Optional list of mean values for normalization
+            std: Optional list of std values for normalization
             wavelength_keys: Optional list of metadata keys for wavelengths
             band_indices: Optional list of band indices to select from the image
 
@@ -193,22 +197,39 @@ class ShardedDataset:
         self.shardshuffle = shardshuffle
         self.patch_count = patch_count
         self.band_indices = band_indices
-        self.norm_stats = self._load_normalization_stats(normalization_stats_path)
+        self.norm_stats = self._load_normalization_stats(
+            stats_path=normalization_stats_path,
+            mean=mean,
+            std=std,
+        )
         self.wavelength_keys = wavelength_keys
         self.wavelengths_cache = {}
         self.dataset = None
         self.seed = seed
 
-    def _load_normalization_stats(self, stats_path: str) -> dict[str, Any]:
+    def _load_normalization_stats(
+        self,
+        stats_path: str,
+        mean: list[float] | None = None,
+        std: list[float] | None = None,
+    ) -> dict[str, Any]:
         """Load normalization statistics from JSON file."""
         with Path(stats_path).open() as f:
             data = json.load(f)
-
         stats = data["statistics"][self.sensor_name]
         mean = (
-            torch.tensor(stats["mean"], dtype=torch.float32).div(255.0).view(-1, 1, 1)
+            torch.tensor(stats["mean"], dtype=torch.float32)
+            .div(255.0)
+            .view(-1, 1, 1)
         )
-        std = torch.tensor(stats["std"], dtype=torch.float32).div(255.0).view(-1, 1, 1)
+        std = (
+            torch.tensor(stats["std"], dtype=torch.float32)
+            .div(255.0)
+            .view(-1, 1, 1)
+        )
+        if mean is not None and std is not None:
+            mean = torch.tensor(mean, dtype=torch.float32).view(-1, 1, 1)
+            std = torch.tensor(std, dtype=torch.float32).view(-1, 1, 1)
 
         # Filter mean/std by band_indices if specified
         if self.band_indices is not None:
