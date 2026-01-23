@@ -106,7 +106,7 @@ class SegmentationSegformer(LightningModule):
             align_corners=False,
             keepdim=True,
             ),
-            data_keys=["image", "mask"],
+            data_keys=None,
             random_apply=False,
         )
 
