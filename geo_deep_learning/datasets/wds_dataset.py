@@ -100,7 +100,10 @@ def create_sensor_datasets(
     for sensor_name, config in sensor_configs.items():
         try:
             datasets[sensor_name] = {}
+            allowed_splits = config.get("splits", ["trn", "val", "tst"])
             for split in ["trn", "val", "tst"]:
+                if split not in allowed_splits:
+                    continue
                 shard_paths, patch_count = create_shard_split_paths(
                     manifest_path=config["manifest_path"],
                     split=split,
@@ -217,7 +220,9 @@ class ShardedDataset:
         with Path(stats_path).open() as f:
             data = json.load(f)
         stats = data["statistics"][self.sensor_name]
-        if mean is None:
+        from_stats_mean = mean is None
+        from_stats_std = std is None
+        if from_stats_mean:
             mean = (
                 torch.tensor(stats["mean"], dtype=torch.float32)
                 .div(255.0)
@@ -225,7 +230,7 @@ class ShardedDataset:
             )
         else:
             mean = torch.tensor(mean, dtype=torch.float32).view(-1, 1, 1)
-        if std is None:
+        if from_stats_std:
             std = (
                 torch.tensor(stats["std"], dtype=torch.float32)
                 .div(255.0)
@@ -237,16 +242,15 @@ class ShardedDataset:
         # Filter mean/std by band_indices if specified
         if self.band_indices is not None:
             indices = torch.LongTensor(self.band_indices)
-            mean = torch.index_select(mean, dim=0, index=indices)
-            std = torch.index_select(std, dim=0, index=indices)
-            band_count = len(self.band_indices)
-        else:
-            band_count = stats["band_count"]
+            if from_stats_mean:
+                mean = torch.index_select(mean, dim=0, index=indices)
+            if from_stats_std:
+                std = torch.index_select(std, dim=0, index=indices)
 
         return {
             "mean": mean,
             "std": std,
-            "band_count": band_count,
+            "band_count": mean.shape[0],
             "patch_count": stats["patch_count"],
             "dtype": stats["dtype"],
         }
