@@ -23,6 +23,7 @@ class SegFormerSegmentationModel(BaseSegmentationModel):
         weights: str | None = None,
         freeze_layers: list[str] | None = None,
         num_classes: int = 1,
+        embedding_dim: int | None = None,
         *,
         use_dynamic_encoder: bool = False,
     ) -> None:
@@ -43,7 +44,11 @@ class SegFormerSegmentationModel(BaseSegmentationModel):
         if freeze_layers:
             self._freeze_layers(layers=freeze_layers)
 
-        self.decoder = Decoder(encoder=encoder, num_classes=num_classes)
+        self.decoder = Decoder(
+            encoder=encoder,
+            num_classes=num_classes,
+            embedding_dim=embedding_dim,
+        )
         self.output_struct = SegmentationOutput
 
     def forward(self, img: torch.Tensor) -> SegmentationOutput:
