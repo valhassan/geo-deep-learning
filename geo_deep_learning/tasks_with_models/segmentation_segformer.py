@@ -13,10 +13,9 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
 from segmentation_models_pytorch.losses import SoftCrossEntropyLoss
 from torch import Tensor
-from torchmetrics.segmentation import MeanIoU
-from torchmetrics.wrappers import ClasswiseWrapper
 
 from geo_deep_learning.models.segmentation.segformer import SegFormerSegmentationModel
+from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
     denormalization,
     load_weights_from_checkpoint,
@@ -44,6 +43,7 @@ class SegmentationSegformer(LightningModule):
         in_channels: int,
         num_classes: int,
         max_samples: int,
+        embedding_dim: int | None = None,
         loss: Callable,
         optimizer: OptimizerCallable = torch.optim.Adam,
         scheduler: LRSchedulerCallable = torch.optim.lr_scheduler.ConstantLR,
@@ -64,7 +64,7 @@ class SegmentationSegformer(LightningModule):
         self.num_classes = num_classes
         self.image_size = image_size
         self.max_samples = max_samples
-
+        self.embedding_dim = embedding_dim
         self.loss = loss
         self.optimizer = optimizer
         self.scheduler = scheduler
@@ -78,43 +78,18 @@ class SegmentationSegformer(LightningModule):
         self.class_colors = class_colors
         self.threshold = 0.5
         self.ce_loss = SoftCrossEntropyLoss(smooth_factor=0.1, ignore_index=255)
-        self.aux_weight = {"s4": 0.05, "s3": 0.075, "s2": 0.05}
 
         num_classes = num_classes + 1 if num_classes == 1 else num_classes
-        self.iou_metric = MeanIoU(
-            num_classes=num_classes,
-            per_class=True,
-            input_format="index",
-            include_background=True,
-        )
         self.labels = (
             [str(i) for i in range(num_classes)]
             if class_labels is None
             else class_labels
         )
-        self.iou_classwise_metric = ClasswiseWrapper(
-            self.iou_metric,
-            labels=self.labels,
-        )
+        self.iou = IoU(num_classes=num_classes, ignore_index=255)
         self._total_samples_visualized = 0
 
     def _apply_aug(self) -> AugmentationSequential:
         """Augmentation pipeline."""
-        random_resized_crop_zoom_in = krn.augmentation.RandomResizedCrop(
-            size=self.image_size,
-            scale=(1.0, 2.0),
-            p=0.5,
-            align_corners=False,
-            keepdim=True,
-        )
-        random_resized_crop_zoom_out = krn.augmentation.RandomResizedCrop(
-            size=self.image_size,
-            scale=(0.5, 1.0),
-            p=0.5,
-            align_corners=False,
-            keepdim=True,
-        )
-
         return AugmentationSequential(
             krn.augmentation.RandomHorizontalFlip(p=0.5, keepdim=True),
             krn.augmentation.RandomVerticalFlip(p=0.5, keepdim=True),
@@ -124,10 +99,15 @@ class SegmentationSegformer(LightningModule):
                 align_corners=True,
                 keepdim=True,
             ),
-            random_resized_crop_zoom_in,
-            random_resized_crop_zoom_out,
-            data_keys=None,
-            random_apply=1,
+            krn.augmentation.RandomResizedCrop(
+            size=self.image_size,
+            scale=(0.4, 1.0),
+            p=0.5,
+            align_corners=False,
+            keepdim=True,
+            ),
+            data_keys=["image", "mask"],
+            random_apply=False,
         )
 
     def configure_model(self) -> None:
@@ -138,6 +118,7 @@ class SegmentationSegformer(LightningModule):
             weights=self.weights,
             freeze_layers=self.freeze_layers,
             num_classes=self.num_classes,
+            embedding_dim=self.embedding_dim,
             use_dynamic_encoder=self.use_dynamic_encoder,
         )
         if self.weights_from_checkpoint_path:
@@ -267,16 +248,7 @@ class SegmentationSegformer(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x)
-        main_loss = self.loss(outputs.out, y) + self.ce_loss(outputs.out, y)
-        aux_loss = torch.zeros((), device=y.device, dtype=main_loss.dtype)
-        aux = outputs.aux or {}
-        for key, weight in self.aux_weight.items():
-            if weight and key in aux:
-                logits = aux[key]
-                aux_loss = aux_loss + weight * (
-                    self.loss(logits, y) + self.ce_loss(logits, y)
-                )
-        loss = main_loss + aux_loss
+        loss = self.loss(outputs.out, y) + self.ce_loss(outputs.out, y)
 
         self.log(
             "train_loss",
@@ -340,8 +312,20 @@ class SegmentationSegformer(LightningModule):
         else:
             y_hat = outputs.out.softmax(dim=1).argmax(dim=1)
 
-        metrics = self.iou_classwise_metric(y_hat, y)
-        metrics["test_loss"] = loss
+        # Update metric state
+        self.iou.update(y_hat, y)
+
+        self.log(
+            "test_loss",
+            loss,
+            batch_size=batch_size,
+            prog_bar=True,
+            logger=True,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+            rank_zero_only=False,
+        )
 
         if self._total_samples_visualized < self.max_samples:
             remaining_samples = self.max_samples - self._total_samples_visualized
@@ -355,16 +339,18 @@ class SegmentationSegformer(LightningModule):
                 epoch_suffix=False,
             )
             self._total_samples_visualized += samples_visualized
-        self.log_dict(
-            metrics,
-            batch_size=batch_size,
-            prog_bar=False,
-            logger=True,
-            on_step=False,
-            on_epoch=True,
-            sync_dist=True,
-            rank_zero_only=False,
-        )
+
+    def on_test_epoch_end(self) -> None:
+        """Compute and log IoU metrics at end of test epoch."""
+        # torchmetrics MulticlassJaccardIndex
+        per_class_iou = self.iou.compute()
+        metrics = {
+            f"iou_{label}": iou
+            for label, iou in zip(self.labels, per_class_iou, strict=False)
+        }
+        metrics["mean_iou"] = torch.nanmean(per_class_iou).item()
+        self.log_dict(metrics, logger=True, sync_dist=True)
+        self.iou.reset()
 
     def _log_visualizations(  # noqa: PLR0913
         self,
