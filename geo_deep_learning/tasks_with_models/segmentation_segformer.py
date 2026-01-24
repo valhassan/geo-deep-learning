@@ -88,25 +88,55 @@ class SegmentationSegformer(LightningModule):
         self.iou = IoU(num_classes=num_classes, ignore_index=255)
         self._total_samples_visualized = 0
 
-    def _apply_aug(self) -> AugmentationSequential:
-        """Augmentation pipeline."""
+        self.geometric_aug = self._geometric_aug()
+        self.radiometric_aug = self._radiometric_aug()
+
+    def _geometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
             krn.augmentation.RandomHorizontalFlip(p=0.5, keepdim=True),
             krn.augmentation.RandomVerticalFlip(p=0.5, keepdim=True),
             krn.augmentation.RandomRotation90(
                 times=(1, 3),
                 p=0.5,
-                align_corners=True,
+                align_corners=False,
                 keepdim=True,
             ),
             krn.augmentation.RandomResizedCrop(
-            size=self.image_size,
-            scale=(0.4, 1.0),
-            p=0.5,
-            align_corners=False,
-            keepdim=True,
+                size=self.image_size,
+                scale=(0.5, 1.0),
+                ratio=(0.8, 1.25),
+                p=0.5,
+                align_corners=False,
+                keepdim=True,
             ),
-            data_keys=None,
+            data_keys=["image", "mask"],
+            random_apply=False,
+        )
+
+    def _radiometric_aug(self) -> AugmentationSequential:
+        return AugmentationSequential(
+            krn.augmentation.RandomBrightness(
+                brightness=(0.0, 0.45),
+                p=0.7,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomContrast(
+                contrast=(0.6, 2.0),
+                p=0.65,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomGamma(
+                gamma=(0.6, 1.7),
+                p=0.4,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomGaussianNoise(
+                mean=0.0,
+                std=0.01,
+                p=0.25,
+                keepdim=True,
+            ),
+            data_keys=["image"],
             random_apply=False,
         )
 
@@ -134,6 +164,11 @@ class SegmentationSegformer(LightningModule):
                 load_parts=load_parts,
                 map_location=map_location,
             )
+
+    def on_fit_start(self) -> None:
+        """On fit start."""
+        self.geometric_aug = self.geometric_aug.to(self.device)
+        self.radiometric_aug = self.radiometric_aug.to(self.device)
 
     def configure_optimizers(self) -> list[list[dict[str, Any]]]:
         """Configure optimizers."""
@@ -222,18 +257,18 @@ class SegmentationSegformer(LightningModule):
         dataloader_idx: int,  # noqa: ARG002
     ) -> dict[str, Any]:
         """On after batch transfer."""
-        device = batch["image"].device
-
         if self.trainer.training:
-            aug = self._apply_aug()
-            batch_aug = aug({"image": batch["image"], "mask": batch["mask"]})
-            for key in ["image", "mask"]:
-                tensor = batch_aug[key]
-                batch[key] = (
-                    tensor
-                    if tensor.device == device
-                    else tensor.to(device, non_blocking=True)
-                )
+            x, y = self.geometric_aug(batch["image"], batch["mask"])
+            if y.dtype != batch["mask"].dtype:
+                y = y.round().to(batch["mask"].dtype)
+            batch["mask"] = y
+
+            if x.dtype == torch.uint8:
+                x = x.float().div_(255.0)
+
+            x = self.radiometric_aug(x)
+            batch["image"] = torch.clamp(x, 0.0, 1.0)
+
         batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
         return batch
 
