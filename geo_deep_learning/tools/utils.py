@@ -128,6 +128,11 @@ def load_weights_from_checkpoint(
         checkpoint.get("state_dict") or checkpoint.get("model_state_dict") or checkpoint
     )
     state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
+    state_dict = {
+        k: v
+        for k, v in state_dict.items()
+        if not k.startswith(("geometric_aug.", "radiometric_aug."))
+    }
 
     if load_parts is None:
         model.load_state_dict(state_dict)
