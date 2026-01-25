@@ -140,6 +140,25 @@ class SegmentationSegformer(LightningModule):
             random_apply=False,
         )
 
+    def state_dict(
+        self,
+        destination: dict[str, Any] | None = None,
+        prefix: str = "",
+        *,
+        keep_vars: bool = False,
+    ) -> dict[str, Any]:
+        """Exclude augmentation modules from checkpoint."""
+        state = super().state_dict(
+            destination=destination,
+            prefix=prefix,
+            keep_vars=keep_vars,
+        )
+        return {
+            k: v
+            for k, v in state.items()
+            if not k.startswith(("geometric_aug.", "radiometric_aug."))
+        }
+
     def configure_model(self) -> None:
         """Configure model."""
         self.model = SegFormerSegmentationModel(
