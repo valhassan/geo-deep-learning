@@ -2,6 +2,7 @@
 
 import math
 import warnings
+
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 
@@ -161,8 +162,8 @@ class LinearWarmupCosineAnnealingLR(_LRScheduler):
         ]
 
 
-class linear_warmup_decay:
-    """LR multiplier with linear warmup and cosine/linear decay. For use with LambdaLR."""
+class LinearWarmupDecayLR:
+    """LR multiplier with linear warmup and cosine/linear decay. Used with LambdaLR."""
 
     def __init__(
         self,
@@ -173,6 +174,7 @@ class linear_warmup_decay:
         linear: bool = False,
         min_lr_ratio: float = 0.01,
     ) -> None:
+        """Initialize the linear warmup decay learning rate scheduler."""
         if linear and cosine:
             msg = "linear and cosine cannot be True at the same time"
             raise ValueError(msg)
@@ -183,6 +185,7 @@ class linear_warmup_decay:
         self.min_lr_ratio = min_lr_ratio
 
     def __call__(self, step: int) -> float:
+        """Compute learning rate using chainable form of the scheduler."""
         if step < self.warmup_steps:
             base = float(step) / float(max(1, self.warmup_steps))
         elif not (self.cosine or self.linear):
