@@ -441,23 +441,21 @@ class ShardedDataset:
         """Create optimized WebDataset pipeline for HPC."""
         shard_list = sorted(self.shard_paths)
 
-        if self.split == "trn" and torch.distributed.is_initialized():
-            world_size = torch.distributed.get_world_size()
-            rank = torch.distributed.get_rank()
-            shard_list = shard_list[rank::world_size]
         if len(shard_list) == 0:
             logger.warning(
                 "No shards available for %s %s",
                 self.sensor_name,
                 self.split,
-            )
+                )
             return None
+
         if self.split == "trn":
             dataset = wds.WebDataset(
                 urls=shard_list,
-                shardshuffle=self.shardshuffle,
-                nodesplitter=wds.split_by_node,
-                workersplitter=wds.split_by_worker,
+                resampled=True,
+                shardshuffle=False,
+                nodesplitter=None,
+                workersplitter=None,
                 empty_check=False,
                 seed=self.seed,
             )
@@ -471,7 +469,7 @@ class ShardedDataset:
                 empty_check=False,
             )
         return (
-            dataset.decode()
+            dataset.decode(handler=wds.warn_and_continue)
             .map(self._process_sample, handler=wds.warn_and_continue)
             .batched(self.batch_size, partial=self.split != "trn")
         )
