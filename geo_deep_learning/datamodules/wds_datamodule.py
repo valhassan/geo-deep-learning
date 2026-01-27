@@ -21,6 +21,8 @@ class MultiSensorDataModule(LightningDataModule):
         sensor_configs_path: str,
         model_type: str = "clay",
         patch_size: tuple[int, int] = (512, 512),
+        mean: list[float] | None = None,
+        std: list[float] | None = None,
         epoch_size: int | None = None,
         batch_size: int = 16,
         num_workers: int = 0,
@@ -36,6 +38,8 @@ class MultiSensorDataModule(LightningDataModule):
             sensor_configs_path: Path to YAML config with sensor configurations
             model_type: Output format - "clay", "dofa", or "unified"
             patch_size: Target patch size for augmentations
+            mean: Optional list of mean values for normalization
+            std: Optional list of std values for normalization
             epoch_size: Number of iterations (batches) per epoch
             batch_size: Batch size for all dataloaders
             num_workers: Number of worker processes
@@ -56,6 +60,8 @@ class MultiSensorDataModule(LightningDataModule):
         self.shardshuffle = shardshuffle
         self.seed = seed
         self.patch_size = patch_size
+        self.mean = mean
+        self.std = std
         self.epoch_size = epoch_size
         self.datasets = {}
         self.train_loader = None
@@ -76,6 +82,8 @@ class MultiSensorDataModule(LightningDataModule):
             model_type=self.model_type,
             batch_size=self.batch_size,
             epoch_size=self.epoch_size,
+            mean=self.mean,
+            std=self.std,
             shuffle_buffer=self.shuffle_buffer,
             shardshuffle=self.shardshuffle,
             seed=self.seed,
@@ -110,7 +118,7 @@ class MultiSensorDataModule(LightningDataModule):
             split: Dataset split (trn, val, tst)
 
         Returns:
-            Number of iterations (batches) per epoch
+            Number of iterations (batches) for the epoch
 
         """
         world_size = 1
