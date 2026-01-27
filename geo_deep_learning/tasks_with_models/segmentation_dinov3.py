@@ -12,12 +12,16 @@ from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
 from torch import Tensor
-from torchmetrics.segmentation import MeanIoU
-from torchmetrics.wrappers import ClasswiseWrapper
 
 from geo_deep_learning.models.segmentation.dinov3 import DINOv3SegmentationModel
+from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.target_converters import semantic_to_instance_masks
-from geo_deep_learning.tools.utils import denormalization, load_weights_from_checkpoint
+from geo_deep_learning.tools.utils import (
+    denormalization,
+    load_weights_from_checkpoint,
+    normalization,
+    standardization,
+)
 from geo_deep_learning.tools.visualization import visualize_prediction
 
 warnings.filterwarnings(
@@ -50,6 +54,7 @@ class SegmentationDINOv3(LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.num_classes = num_classes
+        self.in_channels = 3  # DINOv3 uses fixed 3-channel input (ViT)
         self.image_size = image_size
         self.weights_from_checkpoint_path = weights_from_checkpoint_path
         self.optimizer = optimizer
@@ -59,58 +64,91 @@ class SegmentationDINOv3(LightningModule):
         self.max_samples = max_samples
         self.threshold = 0.5
         self.criterion = criterion
+
         num_classes_metric = num_classes + 1 if num_classes == 1 else num_classes
-        self.iou_metric = MeanIoU(
-            num_classes=num_classes_metric,
-            per_class=True,
-            input_format="index",
-            include_background=True,
-        )
         self.labels = (
             [str(i) for i in range(num_classes_metric)]
             if class_labels is None
             else class_labels
         )
-        self.iou_classwise_metric = ClasswiseWrapper(
-            self.iou_metric,
-            labels=self.labels,
-        )
+        self.iou = IoU(num_classes=num_classes_metric, ignore_index=255)
         self._total_samples_visualized = 0
         self.train_samples_count = 0
         self.val_samples_count = 0
         self.test_samples_count = 0
 
-    def _apply_aug(self) -> AugmentationSequential:
-        """Augmentation pipeline."""
-        random_resized_crop_zoom_in = krn.augmentation.RandomResizedCrop(
-            size=self.image_size,
-            scale=(1.0, 2.0),
-            p=0.5,
-            align_corners=False,
-            keepdim=True,
-        )
-        random_resized_crop_zoom_out = krn.augmentation.RandomResizedCrop(
-            size=self.image_size,
-            scale=(0.5, 1.0),
-            p=0.5,
-            align_corners=False,
-            keepdim=True,
-        )
+        self.geometric_aug = self._geometric_aug()
+        self.radiometric_aug = self._radiometric_aug()
 
+    def _geometric_aug(self) -> AugmentationSequential:
+        """Geometric augmentation pipeline (applies to image and mask)."""
         return AugmentationSequential(
             krn.augmentation.RandomHorizontalFlip(p=0.5, keepdim=True),
             krn.augmentation.RandomVerticalFlip(p=0.5, keepdim=True),
             krn.augmentation.RandomRotation90(
                 times=(1, 3),
                 p=0.5,
-                align_corners=True,
+                align_corners=False,
                 keepdim=True,
             ),
-            random_resized_crop_zoom_in,
-            random_resized_crop_zoom_out,
-            data_keys=None,
-            random_apply=1,
+            krn.augmentation.RandomResizedCrop(
+                size=self.image_size,
+                scale=(0.5, 1.0),
+                ratio=(0.8, 1.25),
+                p=0.5,
+                align_corners=False,
+                keepdim=True,
+            ),
+            data_keys=["image", "mask"],
+            random_apply=False,
         )
+
+    def _radiometric_aug(self) -> AugmentationSequential:
+        """Radiometric augmentation pipeline (applies to image only)."""
+        return AugmentationSequential(
+            krn.augmentation.RandomBrightness(
+                brightness=(0.0, 0.45),
+                p=0.7,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomContrast(
+                contrast=(0.6, 2.0),
+                p=0.65,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomGamma(
+                gamma=(0.6, 1.7),
+                p=0.4,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomGaussianNoise(
+                mean=0.0,
+                std=0.01,
+                p=0.25,
+                keepdim=True,
+            ),
+            data_keys=["image"],
+            random_apply=False,
+        )
+
+    def state_dict(
+        self,
+        destination: dict[str, Any] | None = None,
+        prefix: str = "",
+        *,
+        keep_vars: bool = False,
+    ) -> dict[str, Any]:
+        """Exclude augmentation modules from checkpoint."""
+        state = super().state_dict(
+            destination=destination,
+            prefix=prefix,
+            keep_vars=keep_vars,
+        )
+        return {
+            k: v
+            for k, v in state.items()
+            if not k.startswith(("geometric_aug.", "radiometric_aug."))
+        }
 
     def configure_model(self) -> None:
         """Configure model."""
@@ -129,6 +167,11 @@ class SegmentationDINOv3(LightningModule):
                 map_location=map_location,
             )
 
+    def on_fit_start(self) -> None:
+        """On fit start."""
+        self.geometric_aug = self.geometric_aug.to(self.device)
+        self.radiometric_aug = self.radiometric_aug.to(self.device)
+
     def configure_optimizers(self) -> list[list[dict[str, Any]]]:
         """Configure optimizers."""
         optimizer = self.optimizer(self.parameters())
@@ -140,22 +183,99 @@ class SegmentationDINOv3(LightningModule):
         """Forward pass."""
         return self.model(image)
 
+    def preprocess(
+        self,
+        x: torch.Tensor,
+        mean: list[float] | torch.Tensor,
+        std: list[float] | torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Apply normalization and standardization for inference.
+
+        Args:
+            x: Raw input tensor (B, C, H, W), values in [0, 255] range
+            mean: Mean values for standardization (per channel)
+            std: Std values for standardization (per channel)
+
+        Returns:
+            Preprocessed tensor ready for model forward pass
+
+        """
+        # Normalize to [0, 1]
+        x = normalization(x, image_min=0, image_max=255, norm_min=0.0, norm_max=1.0)
+
+        # Convert mean/std to tensors if needed
+        if not isinstance(mean, torch.Tensor):
+            mean = torch.tensor(mean, dtype=torch.float32, device=x.device)
+        if not isinstance(std, torch.Tensor):
+            std = torch.tensor(std, dtype=torch.float32, device=x.device)
+
+        # Ensure correct shape (C, 1, 1)
+        if mean.dim() == 1:
+            mean = mean.view(-1, 1, 1)
+        if std.dim() == 1:
+            std = std.view(-1, 1, 1)
+
+        return standardization(x, mean, std)
+
+    def predict(
+        self,
+        x: torch.Tensor,
+        rescale_to: tuple[int, int] | None = None,
+    ) -> torch.Tensor:
+        """
+        Inference forward pass (expects preprocessed input).
+
+        Args:
+            x: Preprocessed input tensor (B, C, H, W)
+            rescale_to: Optional output size to rescale predictions to (H, W)
+
+        Returns:
+            Predictions (B, C, H, W) - probabilities for each class
+
+        """
+        outputs = self(x)
+        pred_logits = outputs["pred_logits"]  # [B, Q, C+1]
+        pred_masks = outputs["pred_masks"]  # [B, Q, H, W]
+
+        target_size = rescale_to or x.shape[-2:]
+
+        # Upsample masks to target size if needed
+        if pred_masks.shape[-2:] != target_size:
+            pred_masks = torch.nn.functional.interpolate(
+                pred_masks,
+                size=target_size,
+                mode="bilinear",
+                align_corners=False,
+            )
+
+        # Get class probabilities (exclude no-object class)
+        pred_probs = pred_logits.softmax(dim=-1)[..., :-1]  # [B, Q, C]
+        pred_masks = pred_masks.sigmoid()  # [B, Q, H, W]
+
+        # Combine class probabilities with mask predictions
+        # Output: [B, C, H, W] probabilities
+        return torch.einsum("bqc,bqhw->bchw", pred_probs, pred_masks)
+
     def on_after_batch_transfer(
         self,
         batch: dict[str, Any],
         dataloader_idx: int,  # noqa: ARG002
     ) -> dict[str, Any]:
         """On after batch transfer."""
-        if not self.trainer.training:
-            return batch
-        device = batch["image"].device
-        aug = self._apply_aug()
-        batch_aug = aug({"image": batch["image"], "mask": batch["mask"]})
-        for key in ["image", "mask"]:
-            if key in batch_aug and batch_aug[key].device != device:
-                batch[key] = batch_aug[key].to(device, non_blocking=True)
-            elif key in batch_aug:
-                batch[key] = batch_aug[key]
+        if self.trainer.training:
+            x, y = self.geometric_aug(batch["image"], batch["mask"])
+            if y.dtype != batch["mask"].dtype:
+                y = y.round().to(batch["mask"].dtype)
+            batch["mask"] = y
+
+            if x.dtype == torch.uint8:
+                x = x.float().div_(255.0)
+
+            x = self.radiometric_aug(x)
+            batch["image"] = torch.clamp(x, 0.0, 1.0)
+
+        batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
         return batch
 
     def training_step(
@@ -289,8 +409,21 @@ class SegmentationDINOv3(LightningModule):
         pred_logits = outputs["pred_logits"]  # [B, Q, C+1]
         pred_masks = outputs["pred_masks"]  # [B, Q, H, W]
         y_hat = self._convert_to_semantic(pred_logits, pred_masks, y.shape[-2:])
-        metrics = self.iou_classwise_metric(y_hat, y)
-        metrics["test_loss"] = loss
+
+        # Update metric state
+        self.iou.update(y_hat, y)
+
+        self.log(
+            "test_loss",
+            loss,
+            batch_size=batch_size,
+            prog_bar=True,
+            logger=True,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+            rank_zero_only=False,
+        )
 
         # Visualization
         if self._total_samples_visualized < self.max_samples:
@@ -306,15 +439,16 @@ class SegmentationDINOv3(LightningModule):
             )
             self._total_samples_visualized += samples_visualized
 
-        self.log_dict(
-            metrics,
-            batch_size=batch_size,
-            prog_bar=False,
-            logger=True,
-            on_step=False,
-            sync_dist=True,
-            rank_zero_only=False,
-        )
+    def on_test_epoch_end(self) -> None:
+        """Compute and log IoU metrics at end of test epoch."""
+        per_class_iou = self.iou.compute()
+        metrics = {
+            f"iou_{label}": iou
+            for label, iou in zip(self.labels, per_class_iou, strict=False)
+        }
+        metrics["mean_iou"] = torch.nanmean(per_class_iou).item()
+        self.log_dict(metrics, logger=True, sync_dist=True)
+        self.iou.reset()
 
     def _convert_to_semantic(
         self,
