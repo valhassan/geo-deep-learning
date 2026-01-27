@@ -83,6 +83,21 @@ def manage_bands(
     return image
 
 
+def _filter_state_dict_by_parts(
+    state_dict: dict[str, torch.Tensor],
+    load_parts: list[str],
+) -> tuple[dict[str, torch.Tensor], dict[str, list[str]]]:
+    """Filter state dict to only include specified parts."""
+    filtered_state_dict = {}
+    loaded_parts_keys = {part: [] for part in load_parts}
+    for k, v in state_dict.items():
+        for part in load_parts:
+            if k.startswith(f"{part}."):
+                filtered_state_dict[k] = v
+                loaded_parts_keys[part].append(k)
+    return filtered_state_dict, loaded_parts_keys
+
+
 def load_weights_from_checkpoint(
     model: torch.nn.Module,
     checkpoint_path: str,
@@ -104,39 +119,52 @@ def load_weights_from_checkpoint(
 
     """
     logger.info("Loading weights from checkpoint: %s", checkpoint_path)
-    checkpoint = torch.load(checkpoint_path, map_location=map_location)
-    state_dict = checkpoint.get("state_dict", checkpoint)
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location=map_location,
+        weights_only=False,
+    )
+    state_dict = (
+        checkpoint.get("state_dict") or checkpoint.get("model_state_dict") or checkpoint
+    )
     state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
-    if load_parts is not None:
-        if isinstance(load_parts, str):
-            load_parts = [load_parts]
+    state_dict = {
+        k: v
+        for k, v in state_dict.items()
+        if not k.startswith(("geometric_aug.", "radiometric_aug."))
+    }
 
-        filtered_state_dict = {}
-        loaded_parts_keys = {part: [] for part in load_parts}
-        for k, v in state_dict.items():
-            for part in load_parts:
-                if k.startswith(f"{part}."):
-                    filtered_state_dict[k] = v
-                    loaded_parts_keys[part].append(k)
+    if load_parts is None:
+        model.load_state_dict(state_dict)
+        return None
 
-        result = model.load_state_dict(filtered_state_dict, strict=False)
-        logger.info("Loaded weights for parts: %s", load_parts)
-        for part in load_parts:
-            num_keys = len(loaded_parts_keys[part])
-            if num_keys > 0:
-                logger.info("  - %s: %s parameters loaded", part, num_keys)
-                examples = loaded_parts_keys[part][:3]
-                if examples:
-                    logger.info("    Examples: %s", ", ".join(examples))
-            else:
-                logger.info(
-                    "  - %s: NO PARAMETERS FOUND - check if this part exists",
-                    part,
-                )
+    if isinstance(load_parts, str):
+        load_parts = [load_parts]
 
-        logger.info("Missing keys: %s", len(result.missing_keys))
-        logger.info("Unexpected keys: %s", len(result.unexpected_keys))
-        return result
-
-    model.load_state_dict(state_dict)
-    return None
+    filtered_state_dict, loaded_parts_keys = _filter_state_dict_by_parts(
+        state_dict,
+        load_parts,
+    )
+    result = model.load_state_dict(filtered_state_dict, strict=False)
+    logger.info("Loaded weights for parts: %s", load_parts)
+    for part in load_parts:
+        num_keys = len(loaded_parts_keys[part])
+        if num_keys > 0:
+            logger.info("  - %s: %s parameters loaded", part, num_keys)
+            examples = loaded_parts_keys[part][:1]
+            if examples:
+                logger.info("    Examples: %s", ", ".join(examples))
+        else:
+            logger.info(
+                "  - %s: NO PARAMETERS FOUND - check if this part exists",
+                part,
+            )
+    logger.info("Missing keys: %s", len(result.missing_keys))
+    examples_missing_keys = result.missing_keys[:2]
+    if examples_missing_keys:
+        logger.info("    Examples: %s", ", ".join(examples_missing_keys))
+    logger.info("Unexpected keys: %s", len(result.unexpected_keys))
+    examples_unexpected_keys = result.unexpected_keys[:2]
+    if examples_unexpected_keys:
+        logger.info("    Examples: %s", ", ".join(examples_unexpected_keys))
+    return result
