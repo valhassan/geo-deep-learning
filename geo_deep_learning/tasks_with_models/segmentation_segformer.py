@@ -1,7 +1,6 @@
 """Segmentation SegFormer model."""
 
 import logging
-import math
 import warnings
 from collections.abc import Callable
 from pathlib import Path
@@ -12,12 +11,18 @@ import torch
 from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
-from models.segmentation.segformer import SegFormerSegmentationModel
-from tools.utils import denormalization, load_weights_from_checkpoint
-from tools.visualization import visualize_prediction
+from segmentation_models_pytorch.losses import SoftCrossEntropyLoss
 from torch import Tensor
-from torchmetrics.segmentation import MeanIoU
-from torchmetrics.wrappers import ClasswiseWrapper
+
+from geo_deep_learning.models.segmentation.segformer import SegFormerSegmentationModel
+from geo_deep_learning.tools.metrics.segmentation_iou import IoU
+from geo_deep_learning.tools.utils import (
+    denormalization,
+    load_weights_from_checkpoint,
+    normalization,
+    standardization,
+)
+from geo_deep_learning.tools.visualization import visualize_prediction
 
 warnings.filterwarnings(
     "ignore",
@@ -38,6 +43,7 @@ class SegmentationSegformer(LightningModule):
         in_channels: int,
         num_classes: int,
         max_samples: int,
+        embedding_dim: int | None = None,
         loss: Callable,
         optimizer: OptimizerCallable = torch.optim.Adam,
         scheduler: LRSchedulerCallable = torch.optim.lr_scheduler.ConstantLR,
@@ -58,7 +64,7 @@ class SegmentationSegformer(LightningModule):
         self.num_classes = num_classes
         self.image_size = image_size
         self.max_samples = max_samples
-
+        self.embedding_dim = embedding_dim
         self.loss = loss
         self.optimizer = optimizer
         self.scheduler = scheduler
@@ -71,56 +77,87 @@ class SegmentationSegformer(LightningModule):
 
         self.class_colors = class_colors
         self.threshold = 0.5
+        self.ce_loss = SoftCrossEntropyLoss(smooth_factor=0.1, ignore_index=255)
 
         num_classes = num_classes + 1 if num_classes == 1 else num_classes
-        self.iou_metric = MeanIoU(
-            num_classes=num_classes,
-            per_class=True,
-            input_format="index",
-            include_background=True,
-        )
         self.labels = (
             [str(i) for i in range(num_classes)]
             if class_labels is None
             else class_labels
         )
-        self.iou_classwise_metric = ClasswiseWrapper(
-            self.iou_metric,
-            labels=self.labels,
-        )
+        self.iou = IoU(num_classes=num_classes, ignore_index=255)
         self._total_samples_visualized = 0
 
-    def _apply_aug(self) -> AugmentationSequential:
-        """Augmentation pipeline."""
-        random_resized_crop_zoom_in = krn.augmentation.RandomResizedCrop(
-            size=self.image_size,
-            scale=(1.0, 2.0),
-            p=0.5,
-            align_corners=False,
-            keepdim=True,
-        )
-        random_resized_crop_zoom_out = krn.augmentation.RandomResizedCrop(
-            size=self.image_size,
-            scale=(0.5, 1.0),
-            p=0.5,
-            align_corners=False,
-            keepdim=True,
-        )
+        self.geometric_aug = self._geometric_aug()
+        self.radiometric_aug = self._radiometric_aug()
 
+    def _geometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
             krn.augmentation.RandomHorizontalFlip(p=0.5, keepdim=True),
             krn.augmentation.RandomVerticalFlip(p=0.5, keepdim=True),
             krn.augmentation.RandomRotation90(
                 times=(1, 3),
                 p=0.5,
-                align_corners=True,
+                align_corners=False,
                 keepdim=True,
             ),
-            random_resized_crop_zoom_in,
-            random_resized_crop_zoom_out,
-            data_keys=None,
-            random_apply=1,
+            krn.augmentation.RandomResizedCrop(
+                size=self.image_size,
+                scale=(0.5, 1.0),
+                ratio=(0.8, 1.25),
+                p=0.5,
+                align_corners=False,
+                keepdim=True,
+            ),
+            data_keys=["image", "mask"],
+            random_apply=False,
         )
+
+    def _radiometric_aug(self) -> AugmentationSequential:
+        return AugmentationSequential(
+            krn.augmentation.RandomBrightness(
+                brightness=(0.0, 0.45),
+                p=0.7,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomContrast(
+                contrast=(0.6, 2.0),
+                p=0.65,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomGamma(
+                gamma=(0.6, 1.7),
+                p=0.4,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomGaussianNoise(
+                mean=0.0,
+                std=0.01,
+                p=0.25,
+                keepdim=True,
+            ),
+            data_keys=["image"],
+            random_apply=False,
+        )
+
+    def state_dict(
+        self,
+        destination: dict[str, Any] | None = None,
+        prefix: str = "",
+        *,
+        keep_vars: bool = False,
+    ) -> dict[str, Any]:
+        """Exclude augmentation modules from checkpoint."""
+        state = super().state_dict(
+            destination=destination,
+            prefix=prefix,
+            keep_vars=keep_vars,
+        )
+        return {
+            k: v
+            for k, v in state.items()
+            if not k.startswith(("geometric_aug.", "radiometric_aug."))
+        }
 
     def configure_model(self) -> None:
         """Configure model."""
@@ -130,6 +167,7 @@ class SegmentationSegformer(LightningModule):
             weights=self.weights,
             freeze_layers=self.freeze_layers,
             num_classes=self.num_classes,
+            embedding_dim=self.embedding_dim,
             use_dynamic_encoder=self.use_dynamic_encoder,
         )
         if self.weights_from_checkpoint_path:
@@ -146,54 +184,15 @@ class SegmentationSegformer(LightningModule):
                 map_location=map_location,
             )
 
+    def on_fit_start(self) -> None:
+        """On fit start."""
+        self.geometric_aug = self.geometric_aug.to(self.device)
+        self.radiometric_aug = self.radiometric_aug.to(self.device)
+
     def configure_optimizers(self) -> list[list[dict[str, Any]]]:
         """Configure optimizers."""
         optimizer = self.optimizer(self.parameters())
-        if (
-            self.hparams["scheduler"]["class_path"]
-            == "torch.optim.lr_scheduler.OneCycleLR"
-        ):
-            max_lr = (
-                self.hparams.get("scheduler", {}).get("init_args", {}).get("max_lr")
-            )
-            stepping_batches = self.trainer.estimated_stepping_batches
-            if stepping_batches > -1:
-                scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                    optimizer,
-                    max_lr=max_lr,
-                    total_steps=stepping_batches,
-                )
-            elif (
-                stepping_batches == -1
-                and getattr(self.trainer.datamodule, "epoch_size", None) is not None
-            ):
-                batch_size = self.trainer.datamodule.batch_size
-                epoch_size = self.trainer.datamodule.epoch_size
-                accumulate_grad_batches = self.trainer.accumulate_grad_batches
-                max_epochs = self.trainer.max_epochs
-                steps_per_epoch = math.ceil(
-                    epoch_size / (batch_size * accumulate_grad_batches),
-                )
-                buffer_steps = int(steps_per_epoch * accumulate_grad_batches)
-                scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                    optimizer,
-                    max_lr=max_lr,
-                    steps_per_epoch=steps_per_epoch + buffer_steps,
-                    epochs=max_epochs,
-                )
-            else:
-                stepping_batches = (
-                    self.hparams.get("scheduler", {})
-                    .get("init_args", {})
-                    .get("total_steps")
-                )
-                scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                    optimizer,
-                    max_lr=max_lr,
-                    total_steps=stepping_batches,
-                )
-        else:
-            scheduler = self.scheduler(optimizer)
+        scheduler = self.scheduler(optimizer)
 
         return [optimizer], [{"scheduler": scheduler, **self.scheduler_config}]
 
@@ -201,22 +200,95 @@ class SegmentationSegformer(LightningModule):
         """Forward pass."""
         return self.model(image)
 
+    def preprocess(
+        self,
+        x: torch.Tensor,
+        mean: list[float] | torch.Tensor,
+        std: list[float] | torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Apply normalization and standardization for inference.
+
+        Args:
+            x: Raw input tensor (B, C, H, W), values in [0, 255] range
+            mean: Mean values for standardization (per channel)
+            std: Std values for standardization (per channel)
+
+        Returns:
+            Preprocessed tensor ready for model forward pass
+
+        """
+        # Normalize to [0, 1]
+        x = normalization(x, image_min=0, image_max=255, norm_min=0.0, norm_max=1.0)
+
+        # Convert mean/std to tensors if needed
+        if not isinstance(mean, torch.Tensor):
+            mean = torch.tensor(mean, dtype=torch.float32, device=x.device)
+        if not isinstance(std, torch.Tensor):
+            std = torch.tensor(std, dtype=torch.float32, device=x.device)
+
+        # Ensure correct shape (C, 1, 1)
+        if mean.dim() == 1:
+            mean = mean.view(-1, 1, 1)
+        if std.dim() == 1:
+            std = std.view(-1, 1, 1)
+
+        return standardization(x, mean, std)
+
+    def predict(
+        self,
+        x: torch.Tensor,
+        rescale_to: tuple[int, int] | None = None,
+    ) -> torch.Tensor:
+        """
+        Inference forward pass (expects preprocessed input).
+
+        Args:
+            x: Preprocessed input tensor (B, C, H, W)
+            rescale_to: Optional output size to rescale predictions to (H, W)
+
+        Returns:
+            Predictions (B, C, H, W) - probabilities for each class
+
+        """
+        outputs = self(x)
+
+        # Get logits from model output
+        logits = outputs.out
+
+        # Rescale if requested
+        if rescale_to is not None:
+            logits = torch.nn.functional.interpolate(
+                logits,
+                size=rescale_to,
+                mode="bilinear",
+                align_corners=False,
+            )
+
+        # Apply activation based on num_classes
+        if self.num_classes == 1:
+            return logits.sigmoid()
+        return logits.softmax(dim=1)
+
     def on_after_batch_transfer(
         self,
         batch: dict[str, Any],
         dataloader_idx: int,  # noqa: ARG002
     ) -> dict[str, Any]:
         """On after batch transfer."""
-        if not self.trainer.training:
-            return batch
-        device = batch["image"].device
-        aug = self._apply_aug()
-        batch_aug = aug({"image": batch["image"], "mask": batch["mask"]})
-        for key in ["image", "mask"]:
-            if key in batch_aug and batch_aug[key].device != device:
-                batch[key] = batch_aug[key].to(device, non_blocking=True)
-            elif key in batch_aug:
-                batch[key] = batch_aug[key]
+        if self.trainer.training:
+            x, y = self.geometric_aug(batch["image"], batch["mask"])
+            if y.dtype != batch["mask"].dtype:
+                y = y.round().to(batch["mask"].dtype)
+            batch["mask"] = y
+
+            if x.dtype == torch.uint8:
+                x = x.float().div_(255.0)
+
+            x = self.radiometric_aug(x)
+            batch["image"] = torch.clamp(x, 0.0, 1.0)
+
+        batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
         return batch
 
     def training_step(
@@ -229,8 +301,8 @@ class SegmentationSegformer(LightningModule):
         y = batch["mask"]
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
-        y_hat = self(x)
-        loss = self.loss(y_hat, y)
+        outputs = self(x)
+        loss = self.loss(outputs.out, y) + self.ce_loss(outputs.out, y)
 
         self.log(
             "train_loss",
@@ -241,7 +313,7 @@ class SegmentationSegformer(LightningModule):
             on_step=False,
             on_epoch=True,
             sync_dist=True,
-            rank_zero_only=True,
+            rank_zero_only=False,
         )
 
         return loss
@@ -256,8 +328,8 @@ class SegmentationSegformer(LightningModule):
         y = batch["mask"]
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
-        y_hat = self(x)
-        loss = self.loss(y_hat, y)
+        outputs = self(x)
+        loss = self.loss(outputs.out, y) + self.ce_loss(outputs.out, y)
         self.log(
             "val_loss",
             loss,
@@ -267,12 +339,12 @@ class SegmentationSegformer(LightningModule):
             on_step=False,
             on_epoch=True,
             sync_dist=True,
-            rank_zero_only=True,
+            rank_zero_only=False,
         )
         if self.num_classes == 1:
-            y_hat = (y_hat.sigmoid().squeeze(1) > self.threshold).long()
+            y_hat = (outputs.out.sigmoid().squeeze(1) > self.threshold).long()
         else:
-            y_hat = y_hat.softmax(dim=1).argmax(dim=1)
+            y_hat = outputs.out.softmax(dim=1).argmax(dim=1)
 
         return y_hat
 
@@ -286,16 +358,28 @@ class SegmentationSegformer(LightningModule):
         y = batch["mask"]
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
-        y_hat = self(x)
-        loss = self.loss(y_hat, y)
+        outputs = self(x)
+        loss = self.loss(outputs.out, y) + self.ce_loss(outputs.out, y)
 
         if self.num_classes == 1:
-            y_hat = (y_hat.sigmoid().squeeze(1) > self.threshold).long()
+            y_hat = (outputs.out.sigmoid().squeeze(1) > self.threshold).long()
         else:
-            y_hat = y_hat.softmax(dim=1).argmax(dim=1)
+            y_hat = outputs.out.softmax(dim=1).argmax(dim=1)
 
-        metrics = self.iou_classwise_metric(y_hat, y)
-        metrics["test_loss"] = loss
+        # Update metric state
+        self.iou.update(y_hat, y)
+
+        self.log(
+            "test_loss",
+            loss,
+            batch_size=batch_size,
+            prog_bar=True,
+            logger=True,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+            rank_zero_only=False,
+        )
 
         if self._total_samples_visualized < self.max_samples:
             remaining_samples = self.max_samples - self._total_samples_visualized
@@ -309,17 +393,18 @@ class SegmentationSegformer(LightningModule):
                 epoch_suffix=False,
             )
             self._total_samples_visualized += samples_visualized
-        self.log_dict(
-            metrics,
-            batch_size=batch_size,
-            prog_bar=False,
-            logger=True,
-            on_step=False,
-            on_epoch=True,
-            sync_dist=True,
-            rank_zero_only=True,
-        )
-        self.iou_classwise_metric.reset()
+
+    def on_test_epoch_end(self) -> None:
+        """Compute and log IoU metrics at end of test epoch."""
+        # torchmetrics MulticlassJaccardIndex
+        per_class_iou = self.iou.compute()
+        metrics = {
+            f"iou_{label}": iou
+            for label, iou in zip(self.labels, per_class_iou, strict=False)
+        }
+        metrics["mean_iou"] = torch.nanmean(per_class_iou).item()
+        self.log_dict(metrics, logger=True, sync_dist=True)
+        self.iou.reset()
 
     def _log_visualizations(  # noqa: PLR0913
         self,

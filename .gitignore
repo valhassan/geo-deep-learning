@@ -2,4 +2,5 @@
 *.idea**
 *.vscode**
 *uv.lock
+*experiments*
 *geo_deep_learning/notebooks*

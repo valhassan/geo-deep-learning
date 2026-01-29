@@ -2,8 +2,13 @@
 
 import torch
 import torch.nn.functional as fn
-from models.decoders.segformer_mlp import Decoder
-from models.encoders.mix_transformer import DynamicMixTransformer, get_encoder
+
+from geo_deep_learning.models.decoders.segformer_mlp import Decoder
+from geo_deep_learning.models.encoders.mix_transformer import (
+    DynamicMixTransformer,
+    get_encoder,
+)
+from geo_deep_learning.models.heads.segmentation_head import SegmentationOutput
 
 from .base import BaseSegmentationModel
 
@@ -18,6 +23,7 @@ class SegFormerSegmentationModel(BaseSegmentationModel):
         weights: str | None = None,
         freeze_layers: list[str] | None = None,
         num_classes: int = 1,
+        embedding_dim: int | None = None,
         *,
         use_dynamic_encoder: bool = False,
     ) -> None:
@@ -38,19 +44,35 @@ class SegFormerSegmentationModel(BaseSegmentationModel):
         if freeze_layers:
             self._freeze_layers(layers=freeze_layers)
 
-        self.decoder = Decoder(encoder=encoder, num_classes=num_classes)
+        self.decoder = Decoder(
+            encoder=encoder,
+            num_classes=num_classes,
+            embedding_dim=embedding_dim,
+        )
+        self.output_struct = SegmentationOutput
 
-    def forward(self, img: torch.Tensor) -> torch.Tensor:
+    def forward(self, img: torch.Tensor) -> SegmentationOutput:
         """Forward pass."""
         x = self.encoder(img)
-        x = self.decoder(x)
-        return fn.interpolate(
-            input=x,
+        out, aux = self.decoder(x)
+        out = fn.interpolate(
+            input=out,
             size=img.shape[2:],
             scale_factor=None,
             mode="bilinear",
             align_corners=False,
         )
+        if aux is not None:
+            aux = {
+                k: fn.interpolate(
+                    v,
+                    size=img.shape[2:],
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                for k, v in aux.items()
+            }
+        return self.output_struct(out=out, aux=aux)
 
 
 if __name__ == "__main__":

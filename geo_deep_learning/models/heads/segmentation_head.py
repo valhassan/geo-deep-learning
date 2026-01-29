@@ -10,7 +10,7 @@ class SegmentationOutput(NamedTuple):
     """Segmentation output."""
 
     out: torch.Tensor
-    aux: torch.Tensor | None
+    aux: dict[str, torch.Tensor] | None = None
 
 
 class SegmentationHead(nn.Module):
