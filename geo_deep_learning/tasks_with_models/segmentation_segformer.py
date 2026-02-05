@@ -90,6 +90,10 @@ class SegmentationSegformer(LightningModule):
 
         self.geometric_aug = self._geometric_aug()
         self.radiometric_aug = self._radiometric_aug()
+        self.channel_dropout = krn.augmentation.RandomChannelDropout(
+            p=0.1,
+            keepdim=True,
+        )
 
     def _geometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
@@ -188,6 +192,7 @@ class SegmentationSegformer(LightningModule):
         """On fit start."""
         self.geometric_aug = self.geometric_aug.to(self.device)
         self.radiometric_aug = self.radiometric_aug.to(self.device)
+        self.channel_dropout = self.channel_dropout.to(self.device)
 
     def configure_optimizers(self) -> list[list[dict[str, Any]]]:
         """Configure optimizers."""
@@ -289,6 +294,8 @@ class SegmentationSegformer(LightningModule):
             batch["image"] = torch.clamp(x, 0.0, 1.0)
 
         batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
+        if self.trainer.training:
+            batch["image"] = self.channel_dropout(batch["image"])
         return batch
 
     def training_step(
