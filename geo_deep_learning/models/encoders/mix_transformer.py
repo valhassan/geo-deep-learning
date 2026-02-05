@@ -789,43 +789,43 @@ def get_encoder(
 
 
 class DynamicChannelEmbed(nn.Module):
-    """Dynamic Channel Embed with Cross Attention."""
+    """Dynamic channel patch embedding."""
 
     def __init__(  # noqa: PLR0913
         self,
         patch_size: int = 7,
         stride: int = 4,
-        embed_dim: int = 64,  # b0=32, b1-b5 = 64
-        hidden_dim: int = 128,
-        num_heads: int = 4,  # b0=2, b1-b5 = 4
-        bottleneck_channels: int = 0,
+        embed_dim: int = 64,  # b0=32, b1:b5=64
+        num_heads: int = 4,  # b0=2, b1:b5=4
         drop: float = 0.1,
+        max_channels: int = 256,
+        gate_floor: float = 0.5,
+        mod_alpha: float = 0.5,
+        bottleneck_channels: int = 0,
+        attn_drop: float | None = None,
     ) -> None:
         """Initialize DynamicChannelEmbed."""
         super().__init__()
-        self.patch_size = patch_size
-        self.stride = stride
+        if embed_dim % num_heads != 0:
+            msg = "embed_dim must be divisible by num_heads"
+            raise ValueError(msg)
+
+        hidden_dim = embed_dim * 2
         self.embed_dim = embed_dim
-        self.pos_dim = hidden_dim
         self.num_heads = num_heads
-        self.bottleneck_channels = bottleneck_channels
+        self.gate_floor = gate_floor
+        self.mod_alpha = mod_alpha
+        self.max_channels = max_channels
 
-        self.weight_gen = nn.Sequential(
-            nn.Linear(self.pos_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, embed_dim),
-            nn.Tanh(),
-        )
-
-        self.spectral_bottleneck: nn.Module | None = None
-        if self.bottleneck_channels and self.bottleneck_channels > 0:
-            self.spectral_bottleneck = nn.LazyConv2d(
-                out_channels=self.bottleneck_channels,
+        if bottleneck_channels > 0:
+            self.bottleneck = nn.LazyConv2d(
+                out_channels=bottleneck_channels,
                 kernel_size=1,
                 bias=True,
             )
+        else:
+            self.bottleneck = nn.Identity()
 
-        # Depthwise-separable spatial conv
         self.spatial_pw = nn.Conv2d(1, embed_dim, kernel_size=1, bias=True)
         self.spatial_dw = nn.Conv2d(
             embed_dim,
@@ -837,105 +837,111 @@ class DynamicChannelEmbed(nn.Module):
             bias=True,
         )
 
-        # SDPA projections
-        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=True)
-        self.k_proj = nn.Linear(embed_dim, embed_dim, bias=True)
-        self.v_proj = nn.Linear(embed_dim, embed_dim, bias=True)
-
-        # Stabilized gates
-        self.pre_gate_norm = nn.LayerNorm(embed_dim)
-        self.aggregation_gate = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim // 2),
-            nn.ReLU(),
-            nn.Linear(embed_dim // 2, 1),
-            nn.Sigmoid(),
+        self.channel_embed = nn.Embedding(max_channels, hidden_dim)
+        self.weight_gen = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, embed_dim),
+            nn.Tanh(),
         )
 
-        self.proj = nn.Linear(embed_dim, embed_dim)
+        self.qkv = nn.Linear(embed_dim, embed_dim * 3, bias=True)
+        self.pre_gate_norm = nn.LayerNorm(embed_dim)
+        self.gate_mlp = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(embed_dim // 2, 1),
+        )
+
+        self.proj = nn.Linear(embed_dim, embed_dim, bias=True)
         self.drop = nn.Dropout(drop)
+        self.attn_drop = nn.Dropout(drop if attn_drop is None else attn_drop)
         self.norm = nn.LayerNorm(embed_dim)
 
-    def get_position_encoding(self, n_channels: int, device: torch.device) -> Tensor:
-        """Generate sinusoidal position encodings for channels."""
-        positions = torch.arange(n_channels, device=device).float()
-        dim_t = torch.arange(0, self.pos_dim, 2, device=device).float()
-        inv_freq = 1.0 / (10000 ** (dim_t / self.pos_dim))
-        pos_enc = torch.zeros(n_channels, self.pos_dim, device=device)
-        pos_enc[:, 0::2] = torch.sin(positions.unsqueeze(1) * inv_freq)
-        pos_enc[:, 1::2] = torch.cos(positions.unsqueeze(1) * inv_freq)
-        return pos_enc
-
     def forward(self, x: Tensor) -> tuple[Tensor, int, int]:
-        """Forward pass."""
-        batch_size, channels, _, _ = x.shape
+        """
+        Forward pass.
+
+        x: [B, C, H, W]
+        returns: tokens [B, H'*W', D], h_out, w_out
+        """
+        x = self.bottleneck(x)
+        batch_size, channels, height, width = x.shape
         device = x.device
 
-        # Optional spectral bottleneck
-        if self.spectral_bottleneck is not None:
-            x = self.spectral_bottleneck(x)
-            channels_eff = x.shape[1]
-        else:
-            channels_eff = channels
+        if self.max_channels < channels:
+            msg = (
+                f"Input channels {channels} > max_channels {self.max_channels}. "
+                "Increase max_channels or use bottleneck_channels to reduce C."
+            )
+            raise ValueError(msg)
 
-        # Channel PE + per-channel weights
-        pos_enc = self.get_position_encoding(channels_eff, device)  # [ch_eff, pos_dim]
-        channel_weights = self.weight_gen(pos_enc)  # [ch_eff, d]
+        # Vectorized per-channel spatial features
+        xc = x.reshape(batch_size * channels, 1, height, width)
+        feat = self.spatial_pw(xc)
+        feat = self.spatial_dw(feat)  # [B*C, D, H', W']
+        _, emb_dim, h_out, w_out = feat.shape
+        feat = feat.view(
+            batch_size,
+            channels,
+            emb_dim,
+            h_out,
+            w_out,
+        )  # [B, C, D, H', W']
 
-        # Per-channel spatial features
-        spatial_features = []
-        channel_tokens = []
-        for i in range(channels_eff):
-            xi = x[:, i : i + 1]  # [B,1,H,W]
-            feat = self.spatial_pw(xi)  # [B,d,H,W]
-            feat = self.spatial_dw(feat)  # [B,d,H',W']
-            spatial_features.append(feat)
-            token = feat.mean(dim=[2, 3]) + channel_weights[i]  # [B,d]
-            channel_tokens.append(token)
+        # Channel modulation (learnable, index-based)
+        ch_idx = torch.arange(channels, device=device)
+        ch_emb = self.channel_embed(ch_idx)  # [C, hidden_dim]
+        ch_mod = self.weight_gen(ch_emb)  # [C, D]
+        feat = feat * (1.0 + self.mod_alpha * ch_mod.view(1, channels, emb_dim, 1, 1))
 
-        _, embed_dim, h_out, w_out = spatial_features[0].shape
-        channel_stack = torch.stack(channel_tokens, dim=1)  # [B,ch_eff,d]
+        # Channel tokens
+        ch_tok = feat.mean(dim=(3, 4))  # [B, C, D]
 
-        # SDPA over channels
-        d = embed_dim
-        h = self.num_heads
-        assert d % h == 0, "embed_dim must be divisible by num_heads"  # noqa: S101
-        d_head = d // h
-
-        q = (
-            self.q_proj(channel_stack)
-            .view(batch_size, channels_eff, h, d_head)
-            .transpose(1, 2)
+        # Channel self-attention
+        q, k, v = self.qkv(ch_tok).chunk(3, dim=-1)
+        d_head = emb_dim // self.num_heads
+        q = q.view(
+            batch_size,
+            channels,
+            self.num_heads,
+            d_head,
+        ).transpose(1, 2)
+        k = k.view(
+            batch_size,
+            channels,
+            self.num_heads,
+            d_head,
+        ).transpose(1, 2)
+        v = v.view(
+            batch_size,
+            channels,
+            self.num_heads,
+            d_head,
+        ).transpose(1, 2)
+        attn = fn.scaled_dot_product_attention(q, k, v)
+        attn = (
+            attn.transpose(1, 2)
+            .contiguous()
+            .view(
+                batch_size,
+                channels,
+                emb_dim,
+            )
         )
-        k = (
-            self.k_proj(channel_stack)
-            .view(batch_size, channels_eff, h, d_head)
-            .transpose(1, 2)
-        )
-        v = (
-            self.v_proj(channel_stack)
-            .view(batch_size, channels_eff, h, d_head)
-            .transpose(1, 2)
-        )
+        attn = self.attn_drop(attn)
 
-        attn_out = fn.scaled_dot_product_attention(q, k, v)  # [B,h,C,dh]
-        attn_out = (
-            attn_out.transpose(1, 2).contiguous().view(batch_size, channels_eff, d)
-        )  # [B,C,d]
-        attn_out = self.drop(attn_out)
+        # Bounded gating (prevents channel collapse)
+        gated = self.pre_gate_norm(attn)
+        logits = self.gate_mlp(gated).squeeze(-1)  # [B, C]
+        gate = torch.sigmoid(logits)
+        gate = self.gate_floor + (1.0 - self.gate_floor) * gate
 
-        # Stabilized gating
-        gated = self.pre_gate_norm(attn_out)  # [B,C,d]
-        gate = self.aggregation_gate(gated).squeeze(-1)  # [B,C]
-        # gate = 0.5 + 0.5 * gate  # in [0.5, 1.0]
+        # Aggregate spatial maps
+        out_map = torch.einsum("bcdhw,bc->bdhw", feat, gate)
 
-        # Aggregate spatial features
-        out_map = torch.zeros(batch_size, embed_dim, h_out, w_out, device=device)
-        for i, feat in enumerate(spatial_features):
-            g = gate[:, i].view(batch_size, 1, 1, 1)  # [B,1,1,1]
-            out_map = out_map + feat * g
-
-        # Tokens
-        tokens = out_map.flatten(2).transpose(1, 2)  # [B,H'*W',d]
+        # Tokens for transformer
+        tokens = out_map.flatten(2).transpose(1, 2)
         tokens = self.proj(tokens)
         tokens = self.drop(tokens)
         tokens = self.norm(tokens)
@@ -966,7 +972,6 @@ class DynamicMixTransformer(nn.Module, EncoderMixin):
             patch_size=7,
             stride=4,
             embed_dim=base_encoder.patch_embed1.proj.out_channels,
-            hidden_dim=128,
         )
         self.patch_embed2 = base_encoder.patch_embed2
         self.patch_embed3 = base_encoder.patch_embed3
