@@ -5,6 +5,7 @@ from typing import Any
 
 import kornia as krn
 import torch
+import torch.nn.functional as f
 from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
@@ -89,6 +90,30 @@ class SSLMixTransformer(LightningModule):
 
         # 6. Solarize (RGB only)
         self.solarize = krn.augmentation.RandomSolarize(thresholds=0.5, p=0.2)
+        self._aug_module_names = (
+            "global_crop",
+            "local_crop",
+            "flip",
+            "color_aug",
+            "blur",
+            "solarize",
+        )
+
+    def state_dict(
+        self,
+        destination: dict[str, Any] | None = None,
+        prefix: str = "",
+        *,
+        keep_vars: bool = False,
+    ) -> dict[str, Any]:
+        """Exclude augmentation modules from checkpoint."""
+        state = super().state_dict(
+            destination=destination,
+            prefix=prefix,
+            keep_vars=keep_vars,
+        )
+        aug_prefixes = tuple(f"{n}." for n in self._aug_module_names)
+        return {k: v for k, v in state.items() if not k.startswith(aug_prefixes)}
 
     def _augment(
         self,
@@ -141,6 +166,11 @@ class SSLMixTransformer(LightningModule):
                 map_location=map_location,
             )
 
+    def on_fit_start(self) -> None:
+        """On fit start."""
+        for name in self._aug_module_names:
+            setattr(self, name, getattr(self, name).to(self.device))
+
     def configure_optimizers(self) -> dict[str, Any]:
         """Configure optimizers."""
         optimizer = self.optimizer(self.parameters())
@@ -158,12 +188,27 @@ class SSLMixTransformer(LightningModule):
     ) -> dict[str, Any]:
         """On after batch transfer."""
         images = batch["image"]
+        if images.dtype == torch.uint8:
+            images = images.float().div_(255.0)
+        images = torch.clamp(images, 0.0, 1.0)
         mean = batch["mean"]
         std = batch["std"]
         if not self.trainer.training:
+            global_view = f.interpolate(
+                images,
+                size=(224, 224),
+                mode="bilinear",
+                align_corners=False,
+            )
+            local_view = f.interpolate(
+                images,
+                size=(98, 98),
+                mode="bilinear",
+                align_corners=False,
+            )
             batch["views"] = [
-                self._augment(images, mean, std, self.global_crop),
-                self._augment(images, mean, std, self.global_crop),
+                standardization(global_view, mean, std),
+                standardization(local_view, mean, std),
             ]
             return batch
 
@@ -180,20 +225,17 @@ class SSLMixTransformer(LightningModule):
         batch["views"] = views
         return batch
 
-    def training_step(
-        self,
-        batch: dict[str, Any],
-        batch_idx: int,  # noqa: ARG002
-    ) -> torch.Tensor:
-        """Run training step."""
+    def _step(self, batch: dict[str, Any], stage: str) -> torch.Tensor:
+        """Shared forward, loss, and logging for train/val/test."""
         views = batch["views"]
-        zs = [self(view) for view in views]
-        zs = torch.stack(zs, dim=0)
+        batch_size = views[0].shape[0]
+        num_views = len(views)
+        all_views = torch.cat(views, dim=0)
+        z = self(all_views)
+        zs = z.view(num_views, batch_size, -1)
         loss = self.loss(zs)
-        batch_size = zs.shape[1]
-
         self.log(
-            "train_loss",
+            f"{stage}_loss",
             loss,
             batch_size=batch_size,
             prog_bar=True,
@@ -204,6 +246,14 @@ class SSLMixTransformer(LightningModule):
             rank_zero_only=False,
         )
         return loss
+
+    def training_step(
+        self,
+        batch: dict[str, Any],
+        batch_idx: int,  # noqa: ARG002
+    ) -> torch.Tensor:
+        """Run training step."""
+        return self._step(batch, "train")
 
     def validation_step(
         self,
@@ -211,24 +261,7 @@ class SSLMixTransformer(LightningModule):
         batch_idx: int,  # noqa: ARG002
     ) -> torch.Tensor:
         """Run validation step."""
-        views = batch["views"]
-        zs = [self(view) for view in views]
-        zs = torch.stack(zs, dim=0)
-        batch_size = zs.shape[1]
-        loss = self.loss(zs)
-
-        self.log(
-            "val_loss",
-            loss,
-            batch_size=batch_size,
-            prog_bar=True,
-            logger=True,
-            on_step=False,
-            on_epoch=True,
-            sync_dist=True,
-            rank_zero_only=False,
-        )
-        return loss
+        return self._step(batch, "val")
 
     def test_step(
         self,
@@ -236,20 +269,4 @@ class SSLMixTransformer(LightningModule):
         batch_idx: int,  # noqa: ARG002
     ) -> torch.Tensor:
         """Run test step."""
-        views = batch["views"]
-        zs = [self(view) for view in views]
-        zs = torch.stack(zs, dim=0)
-        batch_size = zs.shape[1]
-        loss = self.loss(zs)
-
-        self.log(
-            "test_loss",
-            loss,
-            batch_size=batch_size,
-            prog_bar=True,
-            logger=True,
-            on_step=False,
-            on_epoch=True,
-            sync_dist=True,
-            rank_zero_only=False,
-        )
+        return self._step(batch, "test")
