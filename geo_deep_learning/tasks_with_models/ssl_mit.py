@@ -16,6 +16,8 @@ from geo_deep_learning.tools.utils import load_weights_from_checkpoint, standard
 
 logger = logging.getLogger(__name__)
 
+NUM_TRAIN_VIEWS = 8  # 2 global + 6 local
+
 
 class SSLMixTransformer(LightningModule):
     """SSL MixTransformer model."""
@@ -212,16 +214,9 @@ class SSLMixTransformer(LightningModule):
             ]
             return batch
 
-        views = []
-        # 2 global views to capture global context
-        views.extend(
-            [self._augment(images, mean, std, self.global_crop) for _ in range(2)],
-        )
-        # 6 local views to capture local context
-        views.extend(
-            [self._augment(images, mean, std, self.local_crop) for _ in range(6)],
-        )
-
+        views = [
+            self._augment(images, mean, std, self.global_crop) for _ in range(2)
+        ] + [self._augment(images, mean, std, self.local_crop) for _ in range(6)]
         batch["views"] = views
         return batch
 
@@ -229,10 +224,12 @@ class SSLMixTransformer(LightningModule):
         """Shared forward, loss, and logging for train/val/test."""
         views = batch["views"]
         batch_size = views[0].shape[0]
-        num_views = len(views)
-        all_views = torch.cat(views, dim=0)
-        z = self(all_views)
-        zs = z.view(num_views, batch_size, -1)
+        if len(views) == NUM_TRAIN_VIEWS:
+            z_global = self(torch.cat(views[:2], dim=0)).view(2, batch_size, -1)
+            z_local = self(torch.cat(views[2:], dim=0)).view(6, batch_size, -1)
+            zs = torch.cat([z_global, z_local], dim=0)
+        else:
+            zs = torch.stack([self(views[0]), self(views[1])], dim=0)
         loss = self.loss(zs)
         self.log(
             f"{stage}_loss",
