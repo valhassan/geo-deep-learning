@@ -56,7 +56,7 @@ class SSLMixTransformer(LightningModule):
         self._apply_aug()
 
     def _apply_aug(self) -> None:
-        """Strict Augmentation pipeline for LeJEPA (official order)."""
+        """Augmentation pipeline (crops, flip, radiometric)."""
         # 1. Crops
         self.global_crop = krn.augmentation.RandomResizedCrop(
             size=(224, 224),
@@ -70,35 +70,41 @@ class SSLMixTransformer(LightningModule):
         # 2. Flip
         self.flip = krn.augmentation.RandomHorizontalFlip(p=0.5)
 
-        # 3-4. Color + Grayscale (RGB only)
-        self.color_aug = AugmentationSequential(
-            krn.augmentation.ColorJiggle(
-                brightness=0.4,
-                contrast=0.4,
-                saturation=0.2,
-                hue=0.1,
-                p=0.8,
-            ),
-            krn.augmentation.RandomGrayscale(p=0.2),
-            data_keys=["image"],
-        )
-
-        # 5. Blur
-        self.blur = krn.augmentation.RandomGaussianBlur(
-            kernel_size=(23, 23),
-            sigma=(0.1, 2.0),
-            p=0.5,
-        )
-
-        # 6. Solarize (RGB only)
-        self.solarize = krn.augmentation.RandomSolarize(thresholds=0.5, p=0.2)
+        # 3. Radiometric
+        self.radiometric_aug = self._radiometric_aug()
         self._aug_module_names = (
             "global_crop",
             "local_crop",
             "flip",
-            "color_aug",
-            "blur",
-            "solarize",
+            "radiometric_aug",
+        )
+
+    def _radiometric_aug(self) -> AugmentationSequential:
+        """Radiometric augmentations."""
+        return AugmentationSequential(
+            krn.augmentation.RandomBrightness(
+                brightness=(0.0, 0.45),
+                p=0.7,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomContrast(
+                contrast=(0.6, 2.0),
+                p=0.65,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomGamma(
+                gamma=(0.6, 1.7),
+                p=0.4,
+                keepdim=True,
+            ),
+            krn.augmentation.RandomGaussianNoise(
+                mean=0.0,
+                std=0.01,
+                p=0.25,
+                keepdim=True,
+            ),
+            data_keys=["image"],
+            random_apply=False,
         )
 
     def state_dict(
@@ -124,25 +130,16 @@ class SSLMixTransformer(LightningModule):
         std: torch.Tensor,
         crop: krn.augmentation.RandomResizedCrop,
     ) -> torch.Tensor:
-        """Apply augmentations in official LeJEPA order."""
+        """Apply augmentations (crop, flip, radiometric)."""
         # 1. Crop
         x = crop(x)
 
         # 2. Flip (all channels)
         x = self.flip(x)
 
-        # 3-4. ColorJitter + Grayscale (RGB only)
-        rgb, rest = x[:, :3], x[:, 3:]
-        rgb = self.color_aug(rgb)
-        x = torch.cat([rgb, rest], dim=1)
-
-        # 5. Blur (all channels)
-        x = self.blur(x)
-
-        # 6. Solarize (RGB only)
-        rgb, rest = x[:, :3], x[:, 3:]
-        rgb = self.solarize(rgb)
-        x = torch.cat([rgb, rest], dim=1)
+        # 3. Radiometric
+        x = self.radiometric_aug(x)
+        x = torch.clamp(x, 0.0, 1.0)
         return standardization(x, mean, std)
 
     def configure_model(self) -> None:
@@ -192,7 +189,6 @@ class SSLMixTransformer(LightningModule):
         images = batch["image"]
         if images.dtype == torch.uint8:
             images = images.float().div_(255.0)
-        images = torch.clamp(images, 0.0, 1.0)
         mean = batch["mean"]
         std = batch["std"]
         if not self.trainer.training:
