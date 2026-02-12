@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 def slide_inference(  # noqa: PLR0913
     inputs: torch.Tensor,
+    wavelengths: torch.Tensor,
     segmentation_model: nn.Module,
     n_output_channels: int = 256,
     crop_size: tuple[int, int] = (512, 512),
@@ -29,6 +30,7 @@ def slide_inference(  # noqa: PLR0913
 
     Args:
         inputs (tensor): the tensor should have a shape 1xCxHxW (single image).
+        wavelengths (tensor): the tensor should have a shape 1xN (single image).
         segmentation_model (nn.Module): model with .predict() method.
         n_output_channels (int): number of output channels
         crop_size (tuple): (h_crop, w_crop)
@@ -85,6 +87,7 @@ def slide_inference(  # noqa: PLR0913
         with torch.no_grad():
             crop_preds = segmentation_model.predict(
                 crops,
+                wavelengths,
                 rescale_to=crops.shape[2:],
             )
 
@@ -118,6 +121,7 @@ class GeoTiffSegmentationInference:
         checkpoint_path: str,
         mean: list[float],
         std: list[float],
+        wavelengths: list[float],
         device: str = "cuda",
         tile_size: int = 512,
         overlap: int = 171,
@@ -131,6 +135,7 @@ class GeoTiffSegmentationInference:
             checkpoint_path: Path to Lightning checkpoint (.ckpt)
             mean: Mean values for standardization (per channel)
             std: Std values for standardization (per channel)
+            wavelengths: Wavelengths for the model
             device: Device to run inference on
             tile_size: Size of tiles for sliding window
             overlap: Overlap between tiles (stride = tile_size - overlap)
@@ -147,24 +152,24 @@ class GeoTiffSegmentationInference:
         # Store normalization stats
         self.mean = mean
         self.std = std
-
+        self.wavelengths = wavelengths
         # Load model from checkpoint
         logger.info("Loading model from checkpoint: %s", checkpoint_path)
         self.model = self._load_model(checkpoint_path)
 
         # Extract model metadata
         self.num_classes = self.model.num_classes
-        self.in_channels = self.model.in_channels
-        self.dynamic_encoder = (
-            hasattr(self.model, "use_dynamic_encoder")
-            and self.model.use_dynamic_encoder
-        )
+        # self.in_channels = getattr(self.model, "in_channels", 3)
+        # self.dynamic_encoder = (
+        #     hasattr(self.model, "use_dynamic_encoder")
+        #     and self.model.use_dynamic_encoder
+        # )
 
-        logger.info(
-            "Loaded model with %d input channels and %d output classes",
-            self.in_channels,
-            self.num_classes,
-        )
+        # logger.info(
+        #     "Loaded model with %d input channels and %d output classes",
+        #     self.in_channels,
+        #     self.num_classes,
+        # )
 
     def _load_model(self, checkpoint_path: str) -> LightningModule:
         """Load Lightning model from checkpoint."""
@@ -172,6 +177,7 @@ class GeoTiffSegmentationInference:
             checkpoint_path,
             weights_from_checkpoint_path=None,
             map_location=self.device,
+            strict=False,
             weights_only=True,
         )
         model.eval()
@@ -220,12 +226,12 @@ class GeoTiffSegmentationInference:
             profile = src.profile.copy()
             height, width = src.height, src.width
 
-            if not self.dynamic_encoder and src.count != self.in_channels:
-                msg = (
-                    f"Input geotiff has {src.count} channels, "
-                    f"but model expects {self.in_channels} channels"
-                )
-                raise ValueError(msg)
+            # if not self.dynamic_encoder and src.count != self.in_channels:
+            #     msg = (
+            #         f"Input geotiff has {src.count} channels, "
+            #         f"but model expects {self.in_channels} channels"
+            #     )
+            #     raise ValueError(msg)
 
             # Update profile for output
             if output_prob:
@@ -317,6 +323,10 @@ class GeoTiffSegmentationInference:
         # Convert to tensor
         chunk_tensor = torch.from_numpy(chunk_np).float().unsqueeze(0)  # (1, C, H, W)
         chunk_tensor = chunk_tensor.to(self.device)
+        wavelengths_tensor = torch.tensor(
+            self.wavelengths,
+            dtype=torch.float32,
+        ).to(self.device)
 
         # Preprocess
         chunk_tensor = self.model.preprocess(chunk_tensor, self.mean, self.std)
@@ -328,6 +338,7 @@ class GeoTiffSegmentationInference:
         with torch.no_grad():
             pred = slide_inference(
                 inputs=chunk_tensor,
+                wavelengths=wavelengths_tensor,
                 segmentation_model=self.model,
                 n_output_channels=self.num_classes,
                 crop_size=(self.tile_size, self.tile_size),
