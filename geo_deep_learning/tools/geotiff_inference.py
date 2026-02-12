@@ -173,6 +173,7 @@ class GeoTiffSegmentationInference:
             weights_from_checkpoint_path=None,
             map_location=self.device,
             weights_only=True,
+            strict=False,
         )
         model.eval()
         model.to(self.device)
