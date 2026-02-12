@@ -52,6 +52,14 @@ def main() -> None:
         help="Std values for standardization (one per channel)",
     )
 
+    parser.add_argument(
+        "--wavelengths",
+        type=float,
+        nargs="+",
+        required=True,
+        help="Wavelengths for the model",
+    )
+
     # Optional arguments
     parser.add_argument(
         "--device",
@@ -116,6 +124,7 @@ def main() -> None:
     logger.info("Device: %s", args.device)
     logger.info("Mean: %s", args.mean)
     logger.info("Std: %s", args.std)
+    logger.info("Wavelengths: %s", args.wavelengths)
     logger.info("Tile size: %d", args.tile_size)
     logger.info("Overlap: %d", args.overlap)
     logger.info("Batch size: %d", args.batch_size)
@@ -129,6 +138,7 @@ def main() -> None:
         checkpoint_path=args.checkpoint,
         mean=args.mean,
         std=args.std,
+        wavelengths=args.wavelengths,
         device=args.device,
         tile_size=args.tile_size,
         overlap=args.overlap,
