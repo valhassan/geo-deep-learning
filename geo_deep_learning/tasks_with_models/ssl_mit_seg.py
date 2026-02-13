@@ -35,16 +35,14 @@ class SSLMixTransformerSeg(LightningModule):
 
     def __init__(  # noqa: PLR0913
         self,
-        encoder: str = "mit_b0",
-        in_channels: int = 3,
-        weights: str | None = None,
-        stages: list[int] | None = None,
-        projection_head_dim: int = 128,
-        num_classes: int = 5,
-        embedding_dim: int | None = None,
-        ignore_index: int = 255,
+        encoder: str,
+        in_channels: int,
+        num_classes: int,
+        projection_head_dim: int,
+        seg_loss: Callable,
         lambda_seg: float = 1.0,
-        seg_loss: Callable[[Tensor, Tensor], Tensor] | None = None,
+        stages: list[int] | None = None,
+        embedding_dim: int | None = None,
         optimizer: OptimizerCallable = torch.optim.Adam,
         scheduler: LRSchedulerCallable = torch.optim.lr_scheduler.ConstantLR,
         scheduler_config: dict[str, Any] | None = None,
@@ -56,6 +54,7 @@ class SSLMixTransformerSeg(LightningModule):
         use_dynamic_encoder: bool = False,
         val_lejepa: bool = True,
         max_samples: int = 0,
+        weights: str | None = None,
         class_labels: list[str] | None = None,
         class_colors: list[str] | None = None,
         load_parts: str | list[str] | None = None,
@@ -73,7 +72,6 @@ class SSLMixTransformerSeg(LightningModule):
         self.projection_head_dim = projection_head_dim
         self.num_classes = num_classes
         self.embedding_dim = embedding_dim
-        self.ignore_index = ignore_index
         self.lambda_seg = lambda_seg
         self.seg_loss = seg_loss
         self.optimizer = optimizer
@@ -97,7 +95,7 @@ class SSLMixTransformerSeg(LightningModule):
             if class_labels is None
             else class_labels
         )
-        self.iou = IoU(num_classes=num_classes_for_iou, ignore_index=ignore_index)
+        self.iou = IoU(num_classes=num_classes_for_iou, ignore_index=255)
         self.threshold = 0.5
         self._total_samples_visualized = 0
         self._apply_aug()
