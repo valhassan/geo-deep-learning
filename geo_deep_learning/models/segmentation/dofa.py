@@ -65,7 +65,6 @@ class DOFASegmentationModel(BaseSegmentationModel):
         )
 
         self.head = SegmentationHead(in_channels=256, num_classes=num_classes)
-        self.output_struct = SegmentationOutput
 
         if freeze_layers:
             self._freeze_layers(layers=freeze_layers)
@@ -93,7 +92,7 @@ class DOFASegmentationModel(BaseSegmentationModel):
             align_corners=False,
         )
 
-        return self.output_struct(out=x, aux=aux_x)
+        return SegmentationOutput(out=x, aux={"aux": aux_x})
 
 
 if __name__ == "__main__":
