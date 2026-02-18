@@ -459,3 +459,39 @@ class SegmentationDOFA(LightningModule):
             logger.exception("Error in DOFA visualization")
         else:
             return num_samples
+
+
+def export_model(checkpoint_path: str, output_path: str) -> None:
+    """
+    Load checkpoint and export DOFA model via torch.export.
+
+    Inputs (B, C, H, W) and wavelengths (C,) are exported as dynamic.
+    """
+    device = "cpu"
+    model_class = SegmentationDOFA.load_from_checkpoint(
+        checkpoint_path,
+        map_location=device,
+        strict=False,
+    )
+    model = model_class.model
+    model.eval()
+    wavelengths = [0.66, 0.55, 0.48, 0.83]
+
+    x = torch.randn(4, 4, 512, 512, device=device)
+    wv = torch.tensor(wavelengths, dtype=torch.float32, device=device)
+
+    batch = torch.export.Dim("batch", min=1)
+    channels = torch.export.Dim("channels", min=1, max=8)
+    dynamic_shapes = {
+        "x": {0: batch, 1: channels},
+        "wavelengths": {0: channels},
+    }
+
+    exported = torch.export.export(
+        model,
+        args=(x, wv),
+        dynamic_shapes=dynamic_shapes,
+        strict=False,
+    )
+    torch.export.save(exported, output_path)
+    logger.info("Exported to %s", output_path)
