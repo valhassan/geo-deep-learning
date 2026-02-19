@@ -353,11 +353,18 @@ class SSLMixTransformerSeg(LightningModule):
 
         loss = lejepa_loss + self.lambda_seg * seg_loss
 
+        with torch.no_grad():
+            z_flat = zs.reshape(-1, zs.shape[-1])
+            z_std = z_flat.std(dim=0).mean()
+            z_norm = z_flat.norm(dim=-1).mean()
+
         self.log_dict(
             {
                 "train_lejepa_loss": lejepa_loss,
                 "train_seg_loss": seg_loss,
                 "train_loss": loss,
+                "z_std": z_std,
+                "z_norm": z_norm,
             },
             batch_size=batch_size,
             prog_bar=True,
