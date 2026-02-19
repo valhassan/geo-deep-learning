@@ -4,6 +4,7 @@ from typing import NamedTuple
 
 import torch
 from torch import nn
+from torch.utils import _pytree
 
 
 class SegmentationOutput(NamedTuple):
@@ -24,3 +25,9 @@ class SegmentationHead(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
         return self.conv(x)
+
+
+_pytree._register_namedtuple(  # noqa: SLF001
+    SegmentationOutput,
+    serialized_type_name="geo_deep_learning.models.heads.segmentation_head.SegmentationOutput",
+)
