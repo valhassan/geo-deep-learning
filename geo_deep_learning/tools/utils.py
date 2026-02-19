@@ -98,11 +98,28 @@ def _filter_state_dict_by_parts(
     return filtered_state_dict, loaded_parts_keys
 
 
+def _apply_key_mapping(
+    state_dict: dict[str, torch.Tensor],
+    key_mapping: dict[str, str],
+) -> dict[str, torch.Tensor]:
+    """Apply key prefix remapping to state dict."""
+    remapped = {}
+    for k, v in state_dict.items():
+        new_key = k
+        for src_prefix, dst_prefix in key_mapping.items():
+            if k.startswith(f"{src_prefix}."):
+                new_key = f"{dst_prefix}.{k[len(src_prefix) + 1:]}"
+                break
+        remapped[new_key] = v
+    return remapped
+
+
 def load_weights_from_checkpoint(
     model: torch.nn.Module,
     checkpoint_path: str,
     load_parts: str | list[str] | None = None,
     map_location: torch.device | None = None,
+    key_mapping: dict[str, str] | None = None,
 ) -> tuple[list[str], list[str]] | None:
     """
     Load weights from a checkpoint into a model.
@@ -110,8 +127,13 @@ def load_weights_from_checkpoint(
     Args:
         model: The model to load weights into
         checkpoint_path: Path to the checkpoint file
-        load_parts: List of model parts to load (e.g., ["encoder", "neck"])
+        load_parts: List of model parts to load from the source checkpoint
+            (e.g., ["encoder", "neck"]). Filtering happens before key_mapping.
         map_location: Optional device mapping for loading the checkpoint
+        key_mapping: Optional dict to remap checkpoint key prefixes to model key
+            prefixes. E.g., {"encoder": "model.encoder"} will remap
+            "encoder.layer1.weight" to "model.encoder.layer1.weight".
+            Applied after load_parts filtering.
 
     Returns:
         Tuple of (missing_keys, unexpected_keys) if selective loading,
@@ -127,25 +149,39 @@ def load_weights_from_checkpoint(
     state_dict = (
         checkpoint.get("state_dict") or checkpoint.get("model_state_dict") or checkpoint
     )
+    # Remove "model." prefix from Lightning checkpoints
     state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
+    # Filter out augmentation modules
     state_dict = {
         k: v
         for k, v in state_dict.items()
         if not k.startswith(("geometric_aug.", "radiometric_aug."))
     }
 
+    if isinstance(load_parts, str):
+        load_parts = [load_parts]
+
+    # Filter by load_parts FIRST (before remapping)
+    if load_parts is not None:
+        state_dict, loaded_parts_keys = _filter_state_dict_by_parts(
+            state_dict,
+            load_parts,
+        )
+    else:
+        loaded_parts_keys = None
+
+    # Apply key remapping AFTER filtering
+    if key_mapping:
+        state_dict = _apply_key_mapping(state_dict, key_mapping)
+
+    # Load into model
     if load_parts is None:
         model.load_state_dict(state_dict)
         return None
 
-    if isinstance(load_parts, str):
-        load_parts = [load_parts]
+    result = model.load_state_dict(state_dict, strict=False)
 
-    filtered_state_dict, loaded_parts_keys = _filter_state_dict_by_parts(
-        state_dict,
-        load_parts,
-    )
-    result = model.load_state_dict(filtered_state_dict, strict=False)
+    # Log results
     logger.info("Loaded weights for parts: %s", load_parts)
     for part in load_parts:
         num_keys = len(loaded_parts_keys[part])
