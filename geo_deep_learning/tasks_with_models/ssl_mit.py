@@ -52,7 +52,7 @@ class SSLMixTransformer(LightningModule):
         self.use_dynamic_encoder = use_dynamic_encoder
         self.load_parts = load_parts
         self.weights_from_checkpoint_path = weights_from_checkpoint_path
-        self.loss = LeJEPALoss(lambda_sig=0.02)
+        self.loss = LeJEPALoss()
         self._apply_aug()
 
     def _apply_aug(self) -> None:
