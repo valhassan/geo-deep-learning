@@ -190,7 +190,7 @@ class SIGReg(nn.Module):
 class LeJEPALoss(nn.Module):
     """LeJEPA loss."""
 
-    def __init__(self, lambda_sig: float = 0.05, **kwargs: object) -> None:
+    def __init__(self, lambda_sig: float = 0.5, **kwargs: object) -> None:
         """Initialize the LeJEPALoss."""
         super().__init__()
         self.lambda_sig = lambda_sig
