@@ -18,7 +18,7 @@ class LeJEPAMixTransformer(nn.Module):
         in_channels: int = 3,
         weights: str | None = None,
         stages: list[int] | None = None,
-        projection_head_dim: int = 128,
+        projection_head_dim: int = 16,
         *,
         use_dynamic_encoder: bool = False,
     ) -> None:
@@ -50,6 +50,10 @@ class LeJEPAMixTransformer(nn.Module):
         encoder_dim = sum(out_channels[s - 1] for s in stages)
         self.projection_head = nn.Sequential(
             nn.Linear(encoder_dim, 2048),
+            nn.BatchNorm1d(2048),
+            nn.GELU(),
+            nn.Linear(2048, 2048),
+            nn.BatchNorm1d(2048),
             nn.GELU(),
             nn.Linear(2048, projection_head_dim),
         )
