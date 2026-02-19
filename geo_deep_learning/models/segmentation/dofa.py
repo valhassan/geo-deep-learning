@@ -71,6 +71,9 @@ class DOFASegmentationModel(BaseSegmentationModel):
 
     def forward(self, x: torch.Tensor, wavelengths: torch.Tensor) -> SegmentationOutput:
         """Forward pass."""
+        expected_ndim = 2
+        if wavelengths.dim() == expected_ndim:
+            wavelengths = wavelengths[0]  # DOFA expects a single wavelength
         image_size = x.shape[2:]
         feats = self.encoder(x, wavelengths)
         x = self.decoder(feats)
