@@ -58,7 +58,7 @@ class FCNHead(nn.Module):
         self.convs = nn.Identity() if num_convs == 0 else nn.Sequential(*convs)
 
         if self.concat_input:
-            self.conv_cat = ConvModule(
+            self.conv_cat: nn.Module = ConvModule(
                 in_channels + channels,
                 channels,
                 kernel_size=3,
