@@ -88,7 +88,7 @@ class SSLMixTransformerSeg(LightningModule):
         self.max_samples = max_samples
         self.class_colors = class_colors
 
-        self.lejepa_loss = LeJEPALoss(lambda_sig=0.02)
+        self.lejepa_loss = LeJEPALoss()
         num_classes_for_iou = num_classes + 1 if num_classes == 1 else num_classes
         self.labels = (
             [str(i) for i in range(num_classes_for_iou)]
@@ -198,11 +198,14 @@ class SSLMixTransformerSeg(LightningModule):
                 "Loading weights from checkpoint: %s",
                 self.weights_from_checkpoint_path,
             )
+            # Remap encoder keys: checkpoint has "encoder.*" but model has
+            # "model.encoder.*" since encoder lives inside self.model
             load_weights_from_checkpoint(
-                model=self.model,
+                model=self,
                 checkpoint_path=self.weights_from_checkpoint_path,
                 load_parts=self.load_parts,
                 map_location=map_location,
+                key_mapping={"encoder": "model.encoder"},
             )
 
     def on_fit_start(self) -> None:
@@ -212,12 +215,6 @@ class SSLMixTransformerSeg(LightningModule):
 
     def configure_optimizers(self) -> dict[str, Any]:
         """Configure optimizers."""
-        opt_init = self.hparams.get("optimizer", {}).get("init_args", {})
-        other_kwargs = {
-            k: v
-            for k, v in opt_init.items()
-            if k not in ("lr", "weight_decay")
-        }
         g1 = {
             "params": self.model.parameters(),
             "lr": self.lr,
@@ -228,7 +225,7 @@ class SSLMixTransformerSeg(LightningModule):
             "lr": self.probe_lr,
             "weight_decay": self.probe_weight_decay,
         }
-        optimizer = self.optimizer([g1, g2], **other_kwargs)
+        optimizer = self.optimizer([g1, g2])
         scheduler = self.scheduler(optimizer)
         return [optimizer], [{"scheduler": scheduler, **self.scheduler_config}]
 
@@ -244,7 +241,11 @@ class SSLMixTransformerSeg(LightningModule):
     ) -> torch.Tensor:
         """Apply normalization and standardization for inference."""
         x = normalization(
-            x, image_min=0, image_max=255, norm_min=0.0, norm_max=1.0,
+            x,
+            image_min=0,
+            image_max=255,
+            norm_min=0.0,
+            norm_max=1.0,
         )
         if not isinstance(mean, torch.Tensor):
             mean = torch.tensor(mean, dtype=torch.float32, device=x.device)
@@ -431,6 +432,7 @@ class SSLMixTransformerSeg(LightningModule):
             logger=True,
             prog_bar=True,
             sync_dist=True,
+            rank_zero_only=False,
         )
         self.iou.reset()
 
