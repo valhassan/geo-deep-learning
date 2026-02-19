@@ -434,18 +434,9 @@ class DOFAv2(nn.Module):
 
     def forward_features(self, x: Tensor, wavelengths: Tensor) -> list[Tensor]:
         """Forward pass extracting features at specified layers."""
-        expected_ndim = 2
-        if wavelengths.dim() == expected_ndim:
-            if not torch.allclose(wavelengths, wavelengths[0:1].expand_as(wavelengths)):
-                msg = "DOFA cannot handle different wavelengths within a batch"
-                raise ValueError(msg)
-            wavelengths = wavelengths[0]
-
         # Patch embedding
         x = self.patch_embed(x, wavelengths)  # [B, L, D]
-
-        # Add positional embedding
-        x = x + self.pos_embed[:, 1:, :]
+        x = x + self.pos_embed[0, 1:]
 
         # Prepend class token
         cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
