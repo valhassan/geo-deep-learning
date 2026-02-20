@@ -198,6 +198,7 @@ class LeJEPALoss(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Run the LeJEPALoss."""
-        inv_loss = (x.mean(0) - x).pow(2).mean()
+        mu = x[:2].mean(0)
+        inv_loss = (mu - x).pow(2).mean()
         sig_loss = self.sigreg(x)
         return self.lambda_sig * sig_loss + (1 - self.lambda_sig) * inv_loss
