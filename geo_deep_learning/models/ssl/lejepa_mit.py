@@ -56,7 +56,6 @@ class LeJEPAMixTransformer(nn.Module):
             nn.BatchNorm1d(2048),
             nn.GELU(),
             nn.Linear(2048, projection_head_dim),
-            nn.BatchNorm1d(projection_head_dim),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
