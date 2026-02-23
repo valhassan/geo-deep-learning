@@ -11,7 +11,6 @@ import torch
 from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
-from segmentation_models_pytorch.losses import SoftCrossEntropyLoss
 from torch import Tensor
 
 from geo_deep_learning.models.segmentation.segformer import SegFormerSegmentationModel
@@ -77,7 +76,6 @@ class SegmentationSegformer(LightningModule):
 
         self.class_colors = class_colors
         self.threshold = 0.5
-        self.ce_loss = SoftCrossEntropyLoss(smooth_factor=0.1, ignore_index=255)
 
         num_classes = num_classes + 1 if num_classes == 1 else num_classes
         self.labels = (
@@ -302,7 +300,7 @@ class SegmentationSegformer(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x)
-        loss = self.loss(outputs.out, y) + self.ce_loss(outputs.out, y)
+        loss = self.loss(outputs.out, y)
 
         self.log(
             "train_loss",
@@ -329,7 +327,7 @@ class SegmentationSegformer(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x)
-        loss = self.loss(outputs.out, y) + self.ce_loss(outputs.out, y)
+        loss = self.loss(outputs.out, y)
         self.log(
             "val_loss",
             loss,
@@ -359,7 +357,7 @@ class SegmentationSegformer(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x)
-        loss = self.loss(outputs.out, y) + self.ce_loss(outputs.out, y)
+        loss = self.loss(outputs.out, y)
 
         if self.num_classes == 1:
             y_hat = (outputs.out.sigmoid().squeeze(1) > self.threshold).long()
