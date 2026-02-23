@@ -4,6 +4,9 @@ set -e  # Exit on any error
 
 PROJECT_ROOT="/home/valhassa/Projects/geo-deep-learning"
 INFERENCE_SCRIPT="${PROJECT_ROOT}/geo_deep_learning/infer.py"
+COMPARE_SCRIPT="${PROJECT_ROOT}/geo_deep_learning/compare_models.py"
+EXPORT_ONNX_SCRIPT="${PROJECT_ROOT}/geo_deep_learning/export_onnx.py"
+
 
 export CUDA_VISIBLE_DEVICES="0"
 export PYTHONPATH="${PROJECT_ROOT}"
@@ -36,12 +39,59 @@ kill_existing_processes() {
 kill_existing_processes
 show_gpu_status
 
-python $INFERENCE_SCRIPT \
-    --checkpoint /export/sata01/wspace/test_dir/multi/all_rgb_data/dofav2.ckpt \
-    --input /home/valhassa/Projects/geo-deep-learning/experiments/data/NS2-058651012010_01_P001-WV02_red-green-blue-nir_clahe25.tif \
-    --output /home/valhassa/Projects/geo-deep-learning/experiments/data/out/ns2_wv2_dofav2_rgbn_clahe25.tif \
-    --mean 0.1014 0.1360 0.1296 0.2604 \
-    --std 0.1102 0.1230 0.1107 0.2099 \
-    --wavelengths 0.6599999999999999 0.5449999999999999 0.48 0.8325
-    # --mean 0.1014 0.1360 0.1296 0.2604 \
-    # --std 0.1102 0.1230 0.1107 0.2099
+
+# python -m geo_deep_learning.tools.patch_checkpoint \
+#   /export/sata01/wspace/test_dir/multi/all_rgb_data/dofav2.ckpt \
+#   -o /export/sata01/wspace/test_dir/multi/all_rgb_data/dofav2_patched.ckpt \
+#   --no-weights-only
+
+
+
+python -m geo_deep_learning.tools.export_model \
+  --model dofa \
+  --checkpoint /export/sata01/wspace/test_dir/multi/all_rgb_data/dofav2_patched.ckpt \
+  --output dofav2.pt2
+
+
+
+
+
+
+# python $INFERENCE_SCRIPT \
+#     --checkpoint /export/sata01/wspace/test_dir/multi/all_rgb_data/dofav2.ckpt \
+#     --input /home/valhassa/Projects/geo-deep-learning/experiments/data/NS2-058651012010_01_P001-WV02_red-green-blue-nir_clahe25.tif \
+#     --output /home/valhassa/Projects/geo-deep-learning/experiments/data/out/ns2_wv2_dofav2_rgbn_clahe25_test.tif \
+#     --mean 0.1014 0.1360 0.1296 0.2604 \
+#     --std 0.1102 0.1230 0.1107 0.2099 \
+#     --wavelengths 0.6599999999999999 0.5449999999999999 0.48 0.8325
+#     # --mean 0.1014 0.1360 0.1296 0.2604 \
+#     # --std 0.1102 0.1230 0.1107 0.2099
+
+
+# python $EXPORT_ONNX_SCRIPT \
+#   --checkpoint /export/sata01/wspace/test_dir/multi/all_rgb_data/dofav2.ckpt \
+#   --output dofav2.pt \
+#   --num-channels 4 \
+#   --wavelengths 0.6599999999999999 0.5449999999999999 0.48 0.8325
+
+
+# TORCH_LOGS="+dynamic" python $EXPORT_ONNX_SCRIPT \
+#   --checkpoint /export/sata01/wspace/test_dir/multi/all_rgb_data/dofav2.ckpt \
+#   --output /home/valhassa/Projects/geo-deep-learning/dofav2_fresh.pt2 \
+#   --image-size 512 512 \
+#   --num-channels 4 \
+#   --wavelengths 0.6599999999999999 0.5449999999999999 0.48 0.8325
+
+# python $INFERENCE_SCRIPT \
+#   --checkpoint /home/valhassa/Projects/geo-deep-learning/dofav2_fresh.pt2 \
+#   --input /home/valhassa/Projects/geo-deep-learning/experiments/data/NS2-058651012010_01_P001-WV02_red-green-blue-nir_clahe25.tif \
+#   --output /home/valhassa/Projects/geo-deep-learning/experiments/data/out/ns2_wv2_dofav2_rgbn_clahe25_pt2.tif \
+#   --mean 0.1014 0.1360 0.1296 0.2604 \
+#   --std 0.1102 0.1230 0.1107 0.2099 \
+#   --wavelengths 0.6599999999999999 0.5449999999999999 0.48 0.8325 \
+#   --num-classes 5 \
+#   --batch-size 4
+
+python $COMPARE_SCRIPT \
+  --checkpoint /export/sata01/wspace/test_dir/multi/all_rgb_data/dofav2.ckpt \
+  --exported dofav2.pt2 \
