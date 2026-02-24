@@ -1,7 +1,7 @@
 """
 GeoAware Loss for semantic segmentation.
 
-Combines Dice loss with Boundary F1 Loss specifically targeting sharp geometries.
+Combines Dice, CE and Boundary F1 (targeting sharp geometries) losses.
 """
 
 import segmentation_models_pytorch as smp
@@ -14,10 +14,12 @@ from geo_deep_learning.tools.losses.bf1 import BoundaryLoss
 class GeoAwareLoss(nn.Module):
     """GeoAware Loss."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         classes: list[int] | None = None,
         alpha: float = 0.2,
+        lambda_ce: float = 0.1,
+        ce_smooth: float = 0.1,
         theta0: int = 3,
         theta: int = 5,
         ignore_index: int | None = 255,
@@ -28,6 +30,8 @@ class GeoAwareLoss(nn.Module):
         Args:
             classes: list of integers representing target classes indices
             alpha: weight multiplier for the boundary loss
+            lambda_ce: weight multiplier for the cross entropy loss
+            ce_smooth: smooth factor for the cross entropy loss
             theta0: kernel size for the boundary loss
             theta: kernel size for the boundary loss
             ignore_index: index of the ignored class, None for no ignored class
@@ -35,6 +39,7 @@ class GeoAwareLoss(nn.Module):
         """
         super().__init__()
         self.alpha = alpha
+        self.lambda_ce = lambda_ce
         self.ignore_index = ignore_index
 
         # Region Loss: Handles the holistic geometry over all classes
@@ -43,6 +48,12 @@ class GeoAwareLoss(nn.Module):
             smooth=1e-5,
             from_logits=True,
             ignore_index=self.ignore_index,
+        )
+
+        # Pixel Loss: Regularizer for gradient stability
+        self.ce_loss = nn.CrossEntropyLoss(
+            ignore_index=self.ignore_index,
+            label_smoothing=ce_smooth,
         )
 
         # Boundary Loss: Acts as a scalpel for specific geometric classes
@@ -65,7 +76,7 @@ class GeoAwareLoss(nn.Module):
 
         """
         l_region = self.region_loss(pred, gt)
-
+        l_ce = self.ce_loss(pred, gt)
         gt_b = gt.clone()
         ignore_mask = None
 
@@ -75,4 +86,4 @@ class GeoAwareLoss(nn.Module):
 
         l_boundary = self.boundary_loss(pred, gt_b, ignore_mask)
 
-        return l_region + (self.alpha * l_boundary)
+        return l_region + (self.lambda_ce * l_ce) + (self.alpha * l_boundary)
