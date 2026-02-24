@@ -52,7 +52,7 @@ class GeoAwareLoss(nn.Module):
 
         # Pixel Loss: Regularizer for gradient stability
         self.ce_loss = nn.CrossEntropyLoss(
-            ignore_index=self.ignore_index,
+            ignore_index=self.ignore_index if self.ignore_index is not None else -100,
             label_smoothing=ce_smooth,
         )
 
