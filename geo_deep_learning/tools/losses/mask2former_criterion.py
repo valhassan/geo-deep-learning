@@ -55,6 +55,7 @@ class SetCriterion(nn.Module):
         num_points: int,
         oversample_ratio: float,
         importance_sample_ratio: float,
+        class_weights: list[float] | None = None,
     ) -> None:
         """Initialize SetCriterion."""
         super().__init__()
@@ -68,6 +69,11 @@ class SetCriterion(nn.Module):
         self.importance_sample_ratio = importance_sample_ratio
         # Weight for the no-object class
         empty_weight = torch.ones(self.num_classes + 1)
+        if class_weights is not None:
+            if len(class_weights) != self.num_classes:
+                msg = f"Expected {self.num_classes} weights, got {len(class_weights)}"
+                raise ValueError(msg)
+            empty_weight[: self.num_classes] = torch.tensor(class_weights)
         empty_weight[-1] = self.eos_coef
         self.register_buffer("empty_weight", empty_weight, persistent=False)
 
@@ -330,6 +336,7 @@ class SetCriterion(nn.Module):
 
 def build_criterion(
     num_classes: int,
+    class_weights: list[float] | None = None,
 ) -> SetCriterion:
     """
     Build a SetCriterion with default settings.
@@ -338,6 +345,7 @@ def build_criterion(
 
     Args:
         num_classes: Number of object categories (excluding background)
+        class_weights: Optional list of weights for each class.
         weight_dict: Loss weights. If None, uses defaults.
         eos_coef: Weight for no-object class
         num_points: Number of points to sample for losses
@@ -381,4 +389,5 @@ def build_criterion(
         num_points=CONFIG.num_points,
         oversample_ratio=CONFIG.oversample_ratio,
         importance_sample_ratio=CONFIG.importance_sample_ratio,
+        class_weights=class_weights,
     )
