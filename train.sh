@@ -24,7 +24,7 @@ set -e  # Exit on any error
 PROJECT_ROOT="/home/valhassa/Projects/geo-deep-learning"
 # CONFIG_FILE="${PROJECT_ROOT}/configs/exp/wds_dofa.yaml"
 # CONFIG_FILE="${PROJECT_ROOT}/configs/exp/wds_segformer.yaml"
-CONFIG_FILE="${PROJECT_ROOT}/configs/exp/wds_dinov3.yaml"
+CONFIG_FILE="${PROJECT_ROOT}/experiments/config_files/wds_dinov3.yaml"
 # CONFIG_FILE="${PROJECT_ROOT}/configs/segformer_config_RGB.yaml"
 # CONFIG_FILE="${PROJECT_ROOT}/configs/unetplus_config_RGB.yaml"
 # CONFIG_FILE="${PROJECT_ROOT}/configs/exp/armando_config_RGB.yaml"
