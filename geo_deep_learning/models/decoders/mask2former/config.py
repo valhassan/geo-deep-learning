@@ -34,19 +34,19 @@ class Mask2FormerConfig:
 
     # loss
     deep_supervision: bool = True
-    no_object_weight: float = 0.1
+    no_object_weight: float = 0.15
 
     # loss weights
-    class_weight: float = 1.0
-    dice_weight: float = 1.0
-    mask_weight: float = 20.0
+    class_weight: float = 2.0
+    dice_weight: float = 5.0
+    mask_weight: float = 5.0
 
     # point sampling
-    oversample_ratio: float = 3.0
-    importance_sample_ratio: float = 0.75
+    oversample_ratio: float = 4.0
+    importance_sample_ratio: float = 0.8
 
     # num points
-    num_points: int = 12544
+    num_points: int = 25088
 
 
 CONFIG = Mask2FormerConfig()
