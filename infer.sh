@@ -37,9 +37,9 @@ kill_existing_processes
 show_gpu_status
 
 python $INFERENCE_SCRIPT \
-    --checkpoint /export/sata01/wspace/test_dir/multi/all_rgb_data/dinov3.ckpt \
-    --input /home/valhassa/Projects/geo-deep-learning/experiments/data/NS2-058651012010_01_P001-WV02_red-green-blue_clahe25.tif \
-    --output /home/valhassa/Projects/geo-deep-learning/experiments/data/out/ns2_wv2_dinov3_rgb_clahe25.tif \
+    --checkpoint /export/sata01/wspace/test_dir/multi/all_rgb_data/dinov3_LoRa_epoch_08_val_loss_15.560.ckpt \
+    --input /home/valhassa/Projects/geo-deep-learning/experiments/data/NS2-058651012010_01_P001-WV02-RGB.tif \
+    --output /home/valhassa/Projects/geo-deep-learning/experiments/data/out/ns2_wv2_dinov3_lora_rgb.tif \
     --mean 0.1014 0.1360 0.1296 \
     --std 0.1102 0.1230 0.1107
     # --mean 0.405 0.432 0.397 \
