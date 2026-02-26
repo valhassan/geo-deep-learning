@@ -27,6 +27,7 @@ from .dinov3_layers import (
     SwiGLUFFN,
     named_apply,
 )
+from .dora import DoRAQKVWrapper
 
 logger = logging.getLogger("dinov3")
 
@@ -212,6 +213,22 @@ class DinoVisionTransformer(nn.Module):
             nn.init.normal_(self.storage_tokens, std=0.02)
         nn.init.zeros_(self.mask_token)
         named_apply(init_weights_vit, self)
+
+    def inject_dora(
+        self,
+        r: int = 16,
+        alpha: int = 32,
+        dropout_rate: float = 0.05,
+    ) -> None:
+        """Inject DoRA wrappers into the QKV layers."""
+        for block in self.blocks:
+            # Wrap the existing qkv layer
+            block.attn.qkv = DoRAQKVWrapper(
+                qkv=block.attn.qkv,
+                r=r,
+                alpha=alpha,
+                dropout_rate=dropout_rate,
+            )
 
     def prepare_tokens_with_masks(
         self,
@@ -473,7 +490,7 @@ def get_reference_points(spatial_shapes: Tensor, device: str | torch.device) -> 
 
 def deform_inputs(x: Tensor, patch_size: int) -> tuple[Tensor, Tensor]:
     """Deform inputs."""
-    bs, c, h, w = x.shape
+    _, _, h, w = x.shape
     spatial_shapes = torch.as_tensor(
         [(h // 8, w // 8), (h // 16, w // 16), (h // 32, w // 32)],
         dtype=torch.long,
@@ -997,7 +1014,7 @@ class DINOv3Adapter(nn.Module):
         c = torch.cat([c2, c3, c4], dim=1)
         h_c, w_c = x.shape[2] // 16, x.shape[3] // 16
         h_toks, w_toks = x.shape[2] // self.patch_size, x.shape[3] // self.patch_size
-        bs, _, h, w = x.shape
+        bs, _, _, _ = x.shape
 
         with torch.autocast("cuda", torch.bfloat16), torch.no_grad():
             all_layers = self.backbone.get_intermediate_layers(
