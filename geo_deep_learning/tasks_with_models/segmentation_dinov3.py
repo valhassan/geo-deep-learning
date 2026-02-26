@@ -48,6 +48,7 @@ class SegmentationDINOv3(LightningModule):
         class_labels: list[str] | None = None,
         class_colors: list[str] | None = None,
         weights_from_checkpoint_path: str | None = None,
+        use_dora: bool = False,
         **kwargs: object,  # noqa: ARG002
     ) -> None:
         """Initialize the model."""
@@ -64,7 +65,7 @@ class SegmentationDINOv3(LightningModule):
         self.max_samples = max_samples
         self.threshold = 0.5
         self.criterion = criterion
-
+        self.use_dora = use_dora
         num_classes_metric = num_classes + 1 if num_classes == 1 else num_classes
         self.labels = (
             [str(i) for i in range(num_classes_metric)]
@@ -152,7 +153,10 @@ class SegmentationDINOv3(LightningModule):
 
     def configure_model(self) -> None:
         """Configure model."""
-        self.model = DINOv3SegmentationModel(num_classes=self.num_classes)
+        self.model = DINOv3SegmentationModel(
+            num_classes=self.num_classes,
+            use_dora=self.use_dora,
+        )
         if self.weights_from_checkpoint_path:
             map_location = self.device
             load_parts = self.hparams.get("load_parts")
