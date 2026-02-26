@@ -14,7 +14,7 @@ class Mask2FormerConfig:
     # transformer decoder
     num_heads: int = 8
     hidden_dim: int = 256
-    num_queries: int = 100
+    num_queries: int = 40
     decoder_layers: int = 6
     dim_feedforward: int = 2048
     pre_norm: bool = False
@@ -46,7 +46,7 @@ class Mask2FormerConfig:
     importance_sample_ratio: float = 0.8
 
     # num points
-    num_points: int = 25088
+    num_points: int = 12544
 
 
 CONFIG = Mask2FormerConfig()
