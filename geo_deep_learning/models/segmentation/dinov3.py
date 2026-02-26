@@ -10,10 +10,12 @@ from geo_deep_learning.models.encoders.dino_v3 import DINOv3Adapter, vit_large
 class DINOv3SegmentationModel(nn.Module):
     """DINOv3 segmentation model."""
 
-    def __init__(self, num_classes: int = 1) -> None:
+    def __init__(self, num_classes: int = 1, *, use_dora: bool = False) -> None:
         """Initialize DINOv3 segmentation model."""
         super().__init__()
         backbone = vit_large()
+        if use_dora:
+            backbone.inject_dora()
         self.encoder = DINOv3Adapter(
             backbone=backbone,
         )
@@ -28,6 +30,31 @@ class DINOv3SegmentationModel(nn.Module):
             },
             num_classes=num_classes,
         )
+        self._manage_gradients(use_dora=use_dora)
+
+    def _manage_gradients(self, *, use_dora: bool = False) -> None:
+        """Manage gradients."""
+        for param in self.parameters():
+            param.requires_grad = False
+
+        # Unfreeze specific modules
+        for param in self.encoder.spm.parameters():
+            param.requires_grad = True
+        for param in self.encoder.interactions.parameters():
+            param.requires_grad = True
+        for param in self.encoder.up.parameters():
+            param.requires_grad = True
+        self.encoder.level_embed.requires_grad = True
+
+        # Unfreeze DoRA specific parameters
+        if use_dora:
+            for name, param in self.encoder.backbone.named_parameters():
+                if "lora_" in name or "mag_" in name:
+                    param.requires_grad = True
+
+        # Unfreeze Decoder
+        for param in self.decoder.parameters():
+            param.requires_grad = True
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
