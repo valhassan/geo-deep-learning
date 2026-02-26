@@ -11,7 +11,6 @@ import torch
 from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
-from segmentation_models_pytorch.losses import SoftCrossEntropyLoss
 from torch import Tensor
 
 from geo_deep_learning.models.segmentation.dofa import DOFASegmentationModel
