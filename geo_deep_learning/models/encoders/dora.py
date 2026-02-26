@@ -66,10 +66,11 @@ class DoRAQKVWrapper(nn.Module):
         lora_a: torch.Tensor,
         lora_b: torch.Tensor,
         mag: torch.Tensor,
+        eps: float = 1e-8,
     ) -> torch.Tensor:
         """Get the DoRA weight."""
         directional = orig_weight + (lora_b @ lora_a) * self.scaling
-        norm = torch.linalg.norm(directional, dim=1, keepdim=True)
+        norm = torch.linalg.norm(directional, dim=1, keepdim=True) + eps
         return mag.view(-1, 1) * (directional / norm)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
