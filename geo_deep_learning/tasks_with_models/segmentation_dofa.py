@@ -68,7 +68,6 @@ class SegmentationDOFA(LightningModule):
         self.max_samples = max_samples
         self.num_classes = num_classes
         self.threshold = 0.5
-        self.ce_loss = SoftCrossEntropyLoss(smooth_factor=0.1, ignore_index=255)
         self.loss = loss
         num_classes = num_classes + 1 if num_classes == 1 else num_classes
         self.labels = (
@@ -287,8 +286,8 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
-        loss_main = self.loss(outputs.out, y) + self.ce_loss(outputs.out, y)
-        loss_aux = self.loss(outputs.aux, y) + self.ce_loss(outputs.aux, y)
+        loss_main = self.loss(outputs.out, y)
+        loss_aux = self.loss(outputs.aux["aux"], y)
         loss = loss_main + 0.4 * loss_aux
         self.log(
             "train_loss",
@@ -316,7 +315,7 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
-        loss = self.loss(outputs.out, y) + self.ce_loss(outputs.out, y)
+        loss = self.loss(outputs.out, y)
         self.log(
             "val_loss",
             loss,
@@ -347,7 +346,7 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
-        loss = self.loss(outputs.out, y) + self.ce_loss(outputs.out, y)
+        loss = self.loss(outputs.out, y)
 
         if self.num_classes == 1:
             y_hat = (outputs.out.sigmoid().squeeze(1) > self.threshold).long()
