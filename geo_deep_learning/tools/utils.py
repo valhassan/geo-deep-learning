@@ -42,6 +42,36 @@ def standardization(
     return (input_tensor - mean) / std
 
 
+def preprocess_for_inference(
+    x: torch.Tensor,
+    mean: list[float] | torch.Tensor,
+    std: list[float] | torch.Tensor,
+    image_min: int = 0,
+    image_max: int = 255,
+) -> torch.Tensor:
+    """
+    Normalize [image_min, image_max] -> [0, 1] then standardize with mean/std.
+
+    Shared by Lightning modules and exported-model inference. x is (B, C, H, W).
+    """
+    x = normalization(
+        x,
+        image_min=image_min,
+        image_max=image_max,
+        norm_min=0.0,
+        norm_max=1.0,
+    )
+    if not isinstance(mean, torch.Tensor):
+        mean = torch.tensor(mean, dtype=torch.float32, device=x.device)
+    if not isinstance(std, torch.Tensor):
+        std = torch.tensor(std, dtype=torch.float32, device=x.device)
+    if mean.dim() == 1:
+        mean = mean.view(-1, 1, 1)
+    if std.dim() == 1:
+        std = std.view(-1, 1, 1)
+    return standardization(x, mean, std)
+
+
 def denormalization(
     image: torch.Tensor,
     mean: torch.Tensor | float | None = None,
