@@ -18,7 +18,7 @@ from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
     denormalization,
     load_weights_from_checkpoint,
-    normalization,
+    preprocess_for_inference,
     standardization,
 )
 from geo_deep_learning.tools.visualization import visualize_prediction
@@ -205,19 +205,7 @@ class SegmentationDOFA(LightningModule):
             Preprocessed tensor ready for model forward pass
 
         """
-        x = normalization(x, image_min=0, image_max=255, norm_min=0.0, norm_max=1.0)
-
-        if not isinstance(mean, torch.Tensor):
-            mean = torch.tensor(mean, dtype=torch.float32, device=x.device)
-        if not isinstance(std, torch.Tensor):
-            std = torch.tensor(std, dtype=torch.float32, device=x.device)
-
-        if mean.dim() == 1:
-            mean = mean.view(-1, 1, 1)
-        if std.dim() == 1:
-            std = std.view(-1, 1, 1)
-
-        return standardization(x, mean, std)
+        return preprocess_for_inference(x, mean, std)
 
     def predict(
         self,
@@ -470,6 +458,7 @@ def export_model(checkpoint_path: str, output_path: str) -> None:
         checkpoint_path,
         map_location=device,
         strict=False,
+        weights_from_checkpoint_path=None,
     )
     model = model_class.model
     model.eval()
