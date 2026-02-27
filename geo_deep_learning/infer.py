@@ -102,10 +102,19 @@ def main() -> None:
         action="store_true",
         help="Output probabilities instead of class labels",
     )
+    parser.add_argument(
+        "--num-classes",
+        type=int,
+        default=None,
+        help="Required when using an exported model (.pt2); ignored for .ckpt",
+    )
 
     args = parser.parse_args()
 
     # Validate inputs
+    if Path(args.checkpoint).suffix == ".pt2" and args.num_classes is None:
+        msg = "When using an exported model (.pt2), --num-classes is required"
+        raise ValueError(msg)
     if not Path(args.checkpoint).exists():
         msg = f"Checkpoint file not found: {args.checkpoint}"
         raise FileNotFoundError(msg)
@@ -131,6 +140,7 @@ def main() -> None:
     logger.info("Chunk size: %d", args.chunk_size)
     logger.info("Compression: %s", args.compress)
     logger.info("Output probabilities: %s", args.output_probabilities)
+    logger.info("Num classes: %s", args.num_classes)
     logger.info("=" * 80)
 
     # Create inference engine
@@ -144,6 +154,7 @@ def main() -> None:
         overlap=args.overlap,
         batch_size=args.batch_size,
         chunk_size=args.chunk_size,
+        num_classes=args.num_classes,
     )
 
     # Run inference
