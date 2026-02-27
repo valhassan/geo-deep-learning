@@ -10,6 +10,8 @@ from lightning.pytorch import LightningModule
 from rasterio.windows import Window
 from torch import nn
 
+from geo_deep_learning.tools.utils import preprocess_for_inference
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,6 +108,49 @@ def slide_inference(  # noqa: PLR0913
     return preds / count_mat
 
 
+class ExportedSegmentationWrapper(nn.Module):
+    """Thin wrapper around torch.export ExportedProgram for inference."""
+
+    def __init__(
+        self,
+        exported_program: torch.export.ExportedProgram,
+        num_classes: int,
+    ) -> None:
+        """Initialize the wrapper."""
+        super().__init__()
+        self._program = exported_program
+        self.num_classes = num_classes
+
+    def preprocess(
+        self,
+        x: torch.Tensor,
+        mean: list[float] | torch.Tensor,
+        std: list[float] | torch.Tensor,
+    ) -> torch.Tensor:
+        """Preprocess the input tensor."""
+        return preprocess_for_inference(x, mean, std)
+
+    def predict(
+        self,
+        x: torch.Tensor,
+        wavelengths: torch.Tensor,
+        rescale_to: tuple[int, int] | None = None,
+    ) -> torch.Tensor:
+        """Predict the output tensor."""
+        out = self._program.module()(x, wavelengths)
+        logits = out[0] if isinstance(out, tuple) else out
+        if rescale_to is not None:
+            logits = torch.nn.functional.interpolate(
+                logits,
+                size=rescale_to,
+                mode="bilinear",
+                align_corners=False,
+            )
+        if self.num_classes == 1:
+            return logits.sigmoid()
+        return logits.softmax(dim=1)
+
+
 class GeoTiffSegmentationInference:
     """
     Model-agnostic geotiff inference for segmentation.
@@ -127,12 +172,13 @@ class GeoTiffSegmentationInference:
         overlap: int = 171,
         batch_size: int = 16,
         chunk_size: int = 4096,
+        num_classes: int | None = None,
     ) -> None:
         """
         Initialize inference engine.
 
         Args:
-            checkpoint_path: Path to Lightning checkpoint (.ckpt)
+            checkpoint_path: Path to Lightning checkpoint (.ckpt) or exported (.pt2)
             mean: Mean values for standardization (per channel)
             std: Std values for standardization (per channel)
             wavelengths: Wavelengths for the model
@@ -141,8 +187,13 @@ class GeoTiffSegmentationInference:
             overlap: Overlap between tiles (stride = tile_size - overlap)
             batch_size: Number of tiles to process simultaneously
             chunk_size: Size of chunks to read from geotiff
+            num_classes: Required when checkpoint_path is an exported model (.pt2)
 
         """
+        if Path(checkpoint_path).suffix == ".pt2" and num_classes is None:
+            msg = "num_classes is required when using an exported model (.pt2)"
+            raise ValueError(msg)
+
         self.device = device
         self.tile_size = tile_size
         self.overlap = overlap
@@ -153,9 +204,9 @@ class GeoTiffSegmentationInference:
         self.mean = mean
         self.std = std
         self.wavelengths = wavelengths
-        # Load model from checkpoint
-        logger.info("Loading model from checkpoint: %s", checkpoint_path)
-        self.model = self._load_model(checkpoint_path)
+        # Load model from checkpoint or exported weights
+        logger.info("Loading model from %s", checkpoint_path)
+        self.model = self._load_model(checkpoint_path, num_classes)
 
         # Extract model metadata
         self.num_classes = self.model.num_classes
@@ -171,8 +222,21 @@ class GeoTiffSegmentationInference:
         #     self.num_classes,
         # )
 
-    def _load_model(self, checkpoint_path: str) -> LightningModule:
-        """Load Lightning model from checkpoint."""
+    def _load_model(
+        self,
+        checkpoint_path: str,
+        num_classes: int | None = None,
+    ) -> LightningModule | ExportedSegmentationWrapper:
+        """Load Lightning checkpoint or torch.export (.pt2) model."""
+        path = Path(checkpoint_path)
+        if path.suffix == ".pt2":
+            exported = torch.export.load(checkpoint_path)
+            wrapper = ExportedSegmentationWrapper(
+                exported,
+                num_classes=num_classes,
+            )
+            wrapper._program.module().to(self.device)  # noqa: SLF001
+            return wrapper
         model = LightningModule.load_from_checkpoint(
             checkpoint_path,
             weights_from_checkpoint_path=None,
