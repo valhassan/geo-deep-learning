@@ -165,7 +165,7 @@ def load_weights_from_checkpoint(
     }
 
     if load_parts is None:
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict, strict=False)
         return None
 
     if isinstance(load_parts, str):
