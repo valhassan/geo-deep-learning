@@ -76,13 +76,13 @@ def main() -> None:
     parser.add_argument(
         "--overlap",
         type=int,
-        default=256,
+        default=384,
         help="Overlap between tiles (stride = tile_size - overlap)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=16,
+        default=24,
         help="Number of tiles to process simultaneously",
     )
     parser.add_argument(
@@ -158,7 +158,7 @@ def main() -> None:
     )
 
     # Run inference
-    inference.predict(
+    inference.run(
         input_path=args.input,
         output_path=args.output,
         compress=args.compress,
