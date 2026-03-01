@@ -22,7 +22,7 @@ def slide_inference(  # noqa: PLR0913
     n_output_channels: int = 256,
     crop_size: tuple[int, int] = (512, 512),
     stride: tuple[int, int] = (341, 341),
-    batch_size: int = 16,
+    batch_size: int = 1,
 ) -> torch.Tensor:
     """
     Inference by sliding-window with overlap using batched predictions.
@@ -87,6 +87,8 @@ def slide_inference(  # noqa: PLR0913
 
         # Predict on batch
         with torch.no_grad():
+            # print(f"Crops shape: {crops.shape}")
+            # print(f"Wavelengths shape: {wavelengths.shape}")
             crop_preds = segmentation_model.predict(
                 crops,
                 wavelengths,
@@ -106,49 +108,6 @@ def slide_inference(  # noqa: PLR0913
         msg = "Some pixels were not covered by any tile"
         raise ValueError(msg)
     return preds / count_mat
-
-
-class ExportedSegmentationWrapper(nn.Module):
-    """Thin wrapper around torch.export ExportedProgram for inference."""
-
-    def __init__(
-        self,
-        exported_program: torch.export.ExportedProgram,
-        num_classes: int,
-    ) -> None:
-        """Initialize the wrapper."""
-        super().__init__()
-        self._program = exported_program
-        self.num_classes = num_classes
-
-    def preprocess(
-        self,
-        x: torch.Tensor,
-        mean: list[float] | torch.Tensor,
-        std: list[float] | torch.Tensor,
-    ) -> torch.Tensor:
-        """Preprocess the input tensor."""
-        return preprocess_for_inference(x, mean, std)
-
-    def predict(
-        self,
-        x: torch.Tensor,
-        wavelengths: torch.Tensor,
-        rescale_to: tuple[int, int] | None = None,
-    ) -> torch.Tensor:
-        """Predict the output tensor."""
-        out = self._program.module()(x, wavelengths)
-        logits = out[0] if isinstance(out, tuple) else out
-        if rescale_to is not None:
-            logits = torch.nn.functional.interpolate(
-                logits,
-                size=rescale_to,
-                mode="bilinear",
-                align_corners=False,
-            )
-        if self.num_classes == 1:
-            return logits.sigmoid()
-        return logits.softmax(dim=1)
 
 
 class GeoTiffSegmentationInference:
@@ -204,39 +163,22 @@ class GeoTiffSegmentationInference:
         self.mean = mean
         self.std = std
         self.wavelengths = wavelengths
-        # Load model from checkpoint or exported weights
+        self._exported_module = None
         logger.info("Loading model from %s", checkpoint_path)
         self.model = self._load_model(checkpoint_path, num_classes)
-
-        # Extract model metadata
-        self.num_classes = self.model.num_classes
-        # self.in_channels = getattr(self.model, "in_channels", 3)
-        # self.dynamic_encoder = (
-        #     hasattr(self.model, "use_dynamic_encoder")
-        #     and self.model.use_dynamic_encoder
-        # )
-
-        # logger.info(
-        #     "Loaded model with %d input channels and %d output classes",
-        #     self.in_channels,
-        #     self.num_classes,
-        # )
 
     def _load_model(
         self,
         checkpoint_path: str,
         num_classes: int | None = None,
-    ) -> LightningModule | ExportedSegmentationWrapper:
+    ) -> LightningModule | None:
         """Load Lightning checkpoint or torch.export (.pt2) model."""
         path = Path(checkpoint_path)
         if path.suffix == ".pt2":
             exported = torch.export.load(checkpoint_path)
-            wrapper = ExportedSegmentationWrapper(
-                exported,
-                num_classes=num_classes,
-            )
-            wrapper._program.module().to(self.device)  # noqa: SLF001
-            return wrapper
+            self._exported_module = exported.module().to(self.device)
+            self.num_classes = num_classes
+            return None
         model = LightningModule.load_from_checkpoint(
             checkpoint_path,
             weights_from_checkpoint_path=None,
@@ -246,18 +188,50 @@ class GeoTiffSegmentationInference:
         )
         model.eval()
         model.to(self.device)
-
-        # Verify model has required interface
+        self.num_classes = model.num_classes
         if not hasattr(model, "predict"):
             msg = "Model must implement .predict() method"
             raise AttributeError(msg)
         if not hasattr(model, "preprocess"):
             msg = "Model must implement .preprocess() method"
             raise AttributeError(msg)
-
         return model
 
+    def preprocess(
+        self,
+        x: torch.Tensor,
+        mean: list[float] | torch.Tensor,
+        std: list[float] | torch.Tensor,
+    ) -> torch.Tensor:
+        """Preprocess input tensor (used by slide_inference)."""
+        if self._exported_module is not None:
+            return preprocess_for_inference(x, mean, std)
+        return self.model.preprocess(x, mean, std)
+
     def predict(
+        self,
+        x: torch.Tensor,
+        wavelengths: torch.Tensor,
+        rescale_to: tuple[int, int] | None = None,
+    ) -> torch.Tensor:
+        """Run model forward (used by slide_inference)."""
+        if self._exported_module is not None:
+            out = self._exported_module(x, wavelengths)
+            logits = out[0] if isinstance(out, tuple) else out
+        else:
+            return self.model.predict(x, wavelengths, rescale_to=rescale_to)
+        if rescale_to is not None:
+            logits = torch.nn.functional.interpolate(
+                logits,
+                size=rescale_to,
+                mode="bilinear",
+                align_corners=False,
+            )
+        if self.num_classes == 1:
+            return logits.sigmoid()
+        return logits.softmax(dim=1)
+
+    def run(
         self,
         input_path: str,
         output_path: str,
@@ -393,7 +367,7 @@ class GeoTiffSegmentationInference:
         ).to(self.device)
 
         # Preprocess
-        chunk_tensor = self.model.preprocess(chunk_tensor, self.mean, self.std)
+        chunk_tensor = self.preprocess(chunk_tensor, self.mean, self.std)
 
         # Calculate stride
         stride = self.tile_size - self.overlap
@@ -403,7 +377,7 @@ class GeoTiffSegmentationInference:
             pred = slide_inference(
                 inputs=chunk_tensor,
                 wavelengths=wavelengths_tensor,
-                segmentation_model=self.model,
+                segmentation_model=self,
                 n_output_channels=self.num_classes,
                 crop_size=(self.tile_size, self.tile_size),
                 stride=(stride, stride),
