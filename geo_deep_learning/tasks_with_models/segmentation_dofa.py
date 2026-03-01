@@ -11,7 +11,7 @@ import torch
 from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
-from torch import Tensor
+from torch import Tensor, nn
 
 from geo_deep_learning.models.segmentation.dofa import DOFASegmentationModel
 from geo_deep_learning.tools.metrics.segmentation_iou import IoU
@@ -447,13 +447,26 @@ class SegmentationDOFA(LightningModule):
             return num_samples
 
 
+class _ExportWrapper(nn.Module):
+    """Wraps DOFA so .pt2 returns a single logits tensor (no custom types)."""
+
+    def __init__(self, model: nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, x: Tensor, wavelengths: Tensor) -> Tensor:
+        out = self.model(x, wavelengths)
+        return out.out
+
+
 def export_model(checkpoint_path: str, output_path: str) -> None:
     """
     Load checkpoint and export DOFA model via torch.export.
 
     Inputs (B, C, H, W) and wavelengths (C,) are exported as dynamic.
+    Exported program returns a single logits tensor.
     """
-    device = "cpu"
+    device = "cuda"
     model_class = SegmentationDOFA.load_from_checkpoint(
         checkpoint_path,
         map_location=device,
@@ -461,13 +474,14 @@ def export_model(checkpoint_path: str, output_path: str) -> None:
         weights_from_checkpoint_path=None,
     )
     model = model_class.model
-    model.eval()
+    model.eval().cuda()
+    wrapper = _ExportWrapper(model).cuda()
     wavelengths = [0.66, 0.55, 0.48, 0.83]
 
-    x = torch.randn(4, 4, 512, 512, device=device)
+    x = torch.randn(int(404.5432096881631), 4, 512, 512, device=device)
     wv = torch.tensor(wavelengths, dtype=torch.float32, device=device)
 
-    batch = torch.export.Dim("batch", min=1)
+    batch = torch.export.Dim("batch", min=1, max=int(404.5432096881631))
     channels = torch.export.Dim("channels", min=1, max=8)
     dynamic_shapes = {
         "x": {0: batch, 1: channels},
@@ -475,7 +489,7 @@ def export_model(checkpoint_path: str, output_path: str) -> None:
     }
 
     exported = torch.export.export(
-        model,
+        wrapper,
         args=(x, wv),
         dynamic_shapes=dynamic_shapes,
         strict=False,
