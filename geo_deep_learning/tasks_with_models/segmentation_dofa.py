@@ -18,7 +18,7 @@ from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
     denormalization,
     load_weights_from_checkpoint,
-    preprocess_for_inference,
+    normalization,
     standardization,
 )
 from geo_deep_learning.tools.visualization import visualize_prediction
@@ -192,6 +192,8 @@ class SegmentationDOFA(LightningModule):
         x: torch.Tensor,
         mean: list[float] | torch.Tensor,
         std: list[float] | torch.Tensor,
+        image_min: int = 0,
+        image_max: int = 255,
     ) -> torch.Tensor:
         """
         Apply normalization and standardization for inference.
@@ -200,12 +202,28 @@ class SegmentationDOFA(LightningModule):
             x: Raw input tensor (B, C, H, W), values in [0, 255] range
             mean: Mean values for standardization (per channel)
             std: Std values for standardization (per channel)
-
+            image_min: Minimum value for normalization
+            image_max: Maximum value for normalization
         Returns:
             Preprocessed tensor ready for model forward pass
 
         """
-        return preprocess_for_inference(x, mean, std)
+        x = normalization(
+            x,
+            image_min=image_min,
+            image_max=image_max,
+            norm_min=0.0,
+            norm_max=1.0,
+        )
+        if not isinstance(mean, torch.Tensor):
+            mean = torch.tensor(mean, dtype=torch.float32, device=x.device)
+        if not isinstance(std, torch.Tensor):
+            std = torch.tensor(std, dtype=torch.float32, device=x.device)
+        if mean.dim() == 1:
+            mean = mean.view(-1, 1, 1)
+        if std.dim() == 1:
+            std = std.view(-1, 1, 1)
+        return standardization(x, mean, std)
 
     def predict(
         self,
@@ -447,24 +465,74 @@ class SegmentationDOFA(LightningModule):
             return num_samples
 
 
-class _ExportWrapper(nn.Module):
-    """Wraps DOFA so .pt2 returns a single logits tensor (no custom types)."""
+class _ExportTTAWrapper(nn.Module):
+    """
+    DOFA export with band-combo TTA; three combos derived from C.
+
+    Inputs: x (B,C,H,W), mean (C,), std (C,), wavelengths (C,).
+    Combos: identity, reverse first 3, last-band first (all from C).
+    """
+
+    _NUM_COMBOS = 3
+    _REV_FIRST_LAST = 2  # last index of "first 3" for rev combo
 
     def __init__(self, model: nn.Module) -> None:
         super().__init__()
         self.model = model
 
-    def forward(self, x: Tensor, wavelengths: Tensor) -> Tensor:
-        out = self.model(x, wavelengths)
-        return out.out
+    def forward(
+        self,
+        x: Tensor,
+        mean: torch.Tensor,
+        std: torch.Tensor,
+        wavelengths: Tensor,
+    ) -> Tensor:
+        c = x.shape[1]
+        dev = x.device
+        mean = mean.view(c, 1, 1)
+        std = std.view(c, 1, 1)
+        base = torch.arange(c, device=dev)
+        idx0 = base
+        # (2, 1, 0, 3, 4, ...) via where — no empty arange, tracer-friendly
+        idx1 = torch.where(
+            base == 0,
+            2,
+            torch.where(
+                base == 1,
+                1,
+                torch.where(base == self._REV_FIRST_LAST, 0, base),
+            ),
+        )
+        # (c-1, 0, 1, ..., c-2): last band first
+        last_idx = base[-1]
+        idx2 = torch.where(base == 0, last_idx, base - 1)
+        x0 = standardization(
+            normalization(x[:, idx0]),
+            mean[idx0],
+            std[idx0],
+        )
+        x1 = standardization(
+            normalization(x[:, idx1]),
+            mean[idx1],
+            std[idx1],
+        )
+        x2 = standardization(
+            normalization(x[:, idx2]),
+            mean[idx2],
+            std[idx2],
+        )
+        l0 = self.model(x0, wavelengths[idx0]).out
+        l1 = self.model(x1, wavelengths[idx1]).out
+        l2 = self.model(x2, wavelengths[idx2]).out
+        return (l0 + l1 + l2) / float(self._NUM_COMBOS)
 
 
 def export_model(checkpoint_path: str, output_path: str) -> None:
     """
-    Load checkpoint and export DOFA model via torch.export.
+    Export DOFA with band-combo TTA.
 
-    Inputs (B, C, H, W) and wavelengths (C,) are exported as dynamic.
-    Exported program returns a single logits tensor.
+    Inputs: x (B,C,H,W), mean (C,), std (C,), wavelengths (C,).
+    Three combos (identity, rev first 3, last first) derived from C.
     """
     device = "cuda"
     model_class = SegmentationDOFA.load_from_checkpoint(
@@ -475,22 +543,24 @@ def export_model(checkpoint_path: str, output_path: str) -> None:
     )
     model = model_class.model
     model.eval().cuda()
-    wrapper = _ExportWrapper(model).cuda()
-    wavelengths = [0.66, 0.55, 0.48, 0.83]
+    wrapper = _ExportTTAWrapper(model).cuda()
+    batch_dim = torch.export.Dim("batch", min=1, max=int(404.5432096881631))
+    channels_dim = torch.export.Dim("channels", min=1, max=8)
+    c = 8
+    x = torch.randn(int(404.5432096881631), c, 512, 512, device=device)
+    mean = torch.randn(c, device=device)
+    std = torch.randn(c, device=device).abs() + 1e-5
+    wavelengths = torch.randn(c, device=device, dtype=torch.float32)
 
-    x = torch.randn(int(404.5432096881631), 4, 512, 512, device=device)
-    wv = torch.tensor(wavelengths, dtype=torch.float32, device=device)
-
-    batch = torch.export.Dim("batch", min=1, max=int(404.5432096881631))
-    channels = torch.export.Dim("channels", min=1, max=8)
     dynamic_shapes = {
-        "x": {0: batch, 1: channels},
-        "wavelengths": {0: channels},
+        "x": {0: batch_dim, 1: channels_dim},
+        "mean": {0: channels_dim},
+        "std": {0: channels_dim},
+        "wavelengths": {0: channels_dim},
     }
-
     exported = torch.export.export(
         wrapper,
-        args=(x, wv),
+        args=(x, mean, std, wavelengths),
         dynamic_shapes=dynamic_shapes,
         strict=False,
     )
