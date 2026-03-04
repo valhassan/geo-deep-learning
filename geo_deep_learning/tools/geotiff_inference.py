@@ -10,8 +10,6 @@ from lightning.pytorch import LightningModule
 from rasterio.windows import Window
 from torch import nn
 
-from geo_deep_learning.tools.utils import preprocess_for_inference
-
 logger = logging.getLogger(__name__)
 
 
@@ -205,7 +203,7 @@ class GeoTiffSegmentationInference:
     ) -> torch.Tensor:
         """Preprocess input tensor (used by slide_inference)."""
         if self._exported_module is not None:
-            return preprocess_for_inference(x, mean, std)
+            return x  # .pt2 does norm + standardize inside the graph
         return self.model.preprocess(x, mean, std)
 
     def predict(
@@ -216,7 +214,14 @@ class GeoTiffSegmentationInference:
     ) -> torch.Tensor:
         """Run model forward (used by slide_inference)."""
         if self._exported_module is not None:
-            out = self._exported_module(x, wavelengths)
+            c = x.shape[1]
+            mean_t = torch.as_tensor(
+                self.mean[:c], dtype=torch.float32, device=x.device,
+            )
+            std_t = torch.as_tensor(
+                self.std[:c], dtype=torch.float32, device=x.device,
+            )
+            out = self._exported_module(x, mean_t, std_t, wavelengths)
             logits = out[0] if isinstance(out, tuple) else out
         else:
             return self.model.predict(x, wavelengths, rescale_to=rescale_to)
