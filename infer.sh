@@ -2,7 +2,7 @@
 
 set -e  # Exit on any error
 
-PROJECT_ROOT="/home/valhassa/Projects/geo-deep-learning"
+PROJECT_ROOT="/home/valhassa/dev/geo-deep-learning"
 
 export CUDA_VISIBLE_DEVICES="0"
 export PYTHONPATH="${PROJECT_ROOT}"
@@ -53,12 +53,12 @@ show_gpu_status
 
 
 python $INFERENCE_SCRIPT \
-    --checkpoint /export/sata01/wspace/test_dir/multi/all_rgb_data/dofav2_geoaware_epoch_25_val_loss_0.615.ckpt \
-    --input /home/valhassa/Projects/geo-deep-learning/experiments/data/NS2-058651012010_01_P001-WV02-RGBN.tif \
-    --output /home/valhassa/Projects/geo-deep-learning/experiments/data/out/ns2_wv2_dofav2_geoaware_epoch_25_val_loss_0.615_test.tif \
-    --mean 0.1014 0.1360 0.1296 0.2604 \
-    --std 0.1102 0.1230 0.1107 0.2099 \
-    --wavelengths 0.6599999999999999 0.5449999999999999 0.48 0.8325 \
+    --checkpoint /home/valhassa/Projects/geo-deep-learning/experiments/model/dofav2_dev_2.pt2 \
+    --input /export/sata01/wspace/test_dir/multi/demo/image/NS2-058651012010_01_P001-WV02-NRGB.tif \
+    --output /export/sata01/wspace/test_dir/multi/demo/prediction/ns2_wv2_dofav2_geoaware_pt2_0.599_NRGB.tif \
+    --mean 0.2604 0.1014 0.1360 0.1296 \
+    --std 0.2099 0.1102 0.1230 0.1107 \
+    --wavelengths 0.8325 0.6599999999999999 0.5449999999999999 0.48 \
     --num-classes 5
 
 # python $COMPARE_SCRIPT \
