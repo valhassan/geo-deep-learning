@@ -108,6 +108,27 @@ def main() -> None:
         default=None,
         help="Required when using an exported model (.pt2); ignored for .ckpt",
     )
+    parser.add_argument(
+        "--radiometric-tta",
+        action="store_true",
+        help="Average over radiometric views (orig + CLAHE); .pt2 only",
+    )
+    parser.add_argument(
+        "--geometric-tta",
+        action="store_true",
+        help="Average over geometric views (id, hflip, vflip, rot180); .pt2 only",
+    )
+    parser.add_argument(
+        "--zoom-out-tta",
+        action="store_true",
+        help="Average identity with zoom-out view (larger window, crop back); no padding",
+    )
+    parser.add_argument(
+        "--zoom-out-scale",
+        type=float,
+        default=0.9,
+        help="Scale for zoom-out window (default 0.9)",
+    )
 
     args = parser.parse_args()
 
@@ -141,6 +162,10 @@ def main() -> None:
     logger.info("Compression: %s", args.compress)
     logger.info("Output probabilities: %s", args.output_probabilities)
     logger.info("Num classes: %s", args.num_classes)
+    logger.info("Radiometric TTA: %s", args.radiometric_tta)
+    logger.info("Geometric TTA: %s", args.geometric_tta)
+    logger.info("Zoom-out TTA: %s", args.zoom_out_tta)
+    logger.info("Zoom-out scale: %s", args.zoom_out_scale)
     logger.info("=" * 80)
 
     # Create inference engine
@@ -155,6 +180,10 @@ def main() -> None:
         batch_size=args.batch_size,
         chunk_size=args.chunk_size,
         num_classes=args.num_classes,
+        use_radiometric_tta=args.radiometric_tta,
+        use_geometric_tta=args.geometric_tta,
+        use_zoom_out_tta=args.zoom_out_tta,
+        zoom_out_scale=args.zoom_out_scale,
     )
 
     # Run inference
