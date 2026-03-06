@@ -1,19 +1,100 @@
 """GeoTIFF inference for segmentation models."""
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
+import kornia as krn
 import numpy as np
 import rasterio as rio
 import torch
 from lightning.pytorch import LightningModule
 from rasterio.windows import Window
 from torch import nn
+from torch.nn import functional as fn
 
 logger = logging.getLogger(__name__)
 
+# Radiometric TTA: orig + CLAHE (per-band)
+_RADTTA_CLAHE_CLIP = 10.0
+_RADTTA_CLAHE_GRID = (32, 32)
 
-def slide_inference(  # noqa: PLR0913
+# Zoom-out TTA: larger window resized to tile_size, then crop center of logits back
+_ZOOM_OUT_SCALE = 0.9
+
+
+def _radiometric_tta_views(x01: torch.Tensor) -> list[torch.Tensor]:
+    """Radiometric TTA: [identity, CLAHE]. In/out [0,1], shape (*, C, H, W)."""
+    clahe = krn.enhance.equalize_clahe(
+        x01,
+        clip_limit=_RADTTA_CLAHE_CLIP,
+        grid_size=_RADTTA_CLAHE_GRID,
+        slow_and_differentiable=False,
+    )
+    return [x01, clahe]
+
+
+def _identity_logits(logits: torch.Tensor) -> torch.Tensor:
+    return logits
+
+
+def _geometric_tta_views(
+    crops: torch.Tensor,
+) -> list[tuple[torch.Tensor, Callable[[torch.Tensor], torch.Tensor]]]:
+    """[(crops, inverse_fn), ...]. Inverse brings logits back to crop space."""
+    t = krn.geometry.transform
+    return [
+        (crops, _identity_logits),
+        (t.hflip(crops), t.hflip),
+        (t.vflip(crops), t.vflip),
+        (t.rot180(crops), t.rot180),
+    ]
+
+
+def _build_tta_pairs(
+    x: torch.Tensor,
+    *,
+    use_radiometric: bool,
+    use_geometric: bool,
+) -> list[tuple[torch.Tensor, Callable[[torch.Tensor], torch.Tensor]]]:
+    """Flat list of (input_batch, inverse_fn). Only one TTA type; empty if neither."""
+    if not use_radiometric and not use_geometric:
+        return []
+    if use_geometric and use_radiometric:
+        return []  # 50-50 mix handled separately in predict()
+    if use_geometric:
+        return _geometric_tta_views(x)
+    x01 = (x / 255.0).clamp(0.0, 1.0)
+    return [
+        ((view * 255.0).clamp(0.0, 255.0), _identity_logits)
+        for view in _radiometric_tta_views(x01)
+    ]
+
+
+def _inverse_zoom_out_logits(
+    logits: torch.Tensor,
+    scale: float,
+    tile_size: tuple[int, int],
+) -> torch.Tensor:
+    """Crop center (tile_size * scale) from logits and resize to tile_size."""
+    h, w = tile_size
+    c_h = int(h * scale)
+    c_w = int(w * scale)
+    if c_h <= 0 or c_w <= 0:
+        return logits
+    # Center crop
+    start_h = (h - c_h) // 2
+    start_w = (w - c_w) // 2
+    cropped = logits[..., start_h : start_h + c_h, start_w : start_w + c_w]
+    return fn.interpolate(
+        cropped,
+        size=(h, w),
+        mode="bilinear",
+        align_corners=False,
+    )
+
+
+def slide_inference(  # noqa: PLR0913, C901, PLR0912, PLR0915
     inputs: torch.Tensor,
     wavelengths: torch.Tensor,
     segmentation_model: nn.Module,
@@ -21,24 +102,26 @@ def slide_inference(  # noqa: PLR0913
     crop_size: tuple[int, int] = (512, 512),
     stride: tuple[int, int] = (341, 341),
     batch_size: int = 1,
+    *,
+    use_zoom_out_tta: bool = False,
+    zoom_out_scale: float = _ZOOM_OUT_SCALE,
 ) -> torch.Tensor:
     """
     Inference by sliding-window with overlap using batched predictions.
 
-    This is a more efficient version of slide_inference that processes multiple
-    tiles in batches for better GPU utilization.
-
     Args:
-        inputs (tensor): the tensor should have a shape 1xCxHxW (single image).
-        wavelengths (tensor): the tensor should have a shape 1xN (single image).
-        segmentation_model (nn.Module): model with .predict() method.
-        n_output_channels (int): number of output channels
-        crop_size (tuple): (h_crop, w_crop)
-        stride (tuple): (h_stride, w_stride)
-        batch_size (int): number of tiles to process simultaneously
+        inputs: (1, C, H, W).
+        wavelengths: (1, N).
+        segmentation_model: model with .predict() method.
+        n_output_channels: number of output channels.
+        crop_size: (h_crop, w_crop).
+        stride: (h_stride, w_stride).
+        batch_size: tiles per batch.
+        use_zoom_out_tta: if True, average identity with zoom-out view (no padding).
+        zoom_out_scale: scale for zoom-out (e.g. 0.9 = larger window).
 
     Returns:
-        Tensor: The output results from model (1, C, H, W).
+        (1, n_output_channels, H, W).
 
     """
     h_stride, w_stride = stride
@@ -49,19 +132,29 @@ def slide_inference(  # noqa: PLR0913
         msg = "Currently only supports single image at a time"
         raise ValueError(msg)
 
-    # Handle case where crop is larger than image
     if h_crop > h_img and w_crop > w_img:
         h_crop, w_crop = min(h_img, w_img), min(h_img, w_img)
 
-    # Calculate grid dimensions
+    # Zoom-out: pad chunk so larger window is always valid
+    if use_zoom_out_tta:
+        larger_size = int(h_crop / zoom_out_scale)
+        margin = (larger_size - h_crop) // 2
+        inputs = fn.pad(
+            inputs,
+            (margin, margin, margin, margin),
+            mode="reflect",
+        )
+        # Coords now refer to original image; extractions use padded offsets
+        pad_offset = margin
+    else:
+        pad_offset = 0
+
     h_grids = max(h_img - h_crop + h_stride - 1, 0) // h_stride + 1
     w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
 
-    # Initialize accumulators
     preds = inputs.new_zeros((1, n_output_channels, h_img, w_img)).cpu()
     count_mat = inputs.new_zeros((1, 1, h_img, w_img)).to(torch.int8).cpu()
 
-    # Collect all tile positions first
     tiles_info = []
     for h_idx in range(h_grids):
         for w_idx in range(w_grids):
@@ -73,27 +166,69 @@ def slide_inference(  # noqa: PLR0913
             x1 = max(x2 - w_crop, 0)
             tiles_info.append((y1, x1, y2, x2))
 
-    # Process tiles in batches
     for i in range(0, len(tiles_info), batch_size):
         batch_tiles_info = tiles_info[i : i + batch_size]
 
-        # Extract all tiles in this batch
+        # Normal crops (with optional pad offset)
         crops = torch.cat(
-            [inputs[:, :, y1:y2, x1:x2] for y1, x1, y2, x2 in batch_tiles_info],
+            [
+                inputs[
+                    :,
+                    :,
+                    y1 + pad_offset : y2 + pad_offset,
+                    x1 + pad_offset : x2 + pad_offset,
+                ]
+                for y1, x1, y2, x2 in batch_tiles_info
+            ],
             dim=0,
         )
 
-        # Predict on batch
+        if use_zoom_out_tta:
+            # Zoom-out crops: larger window centered on tile, resized to crop_size
+            larger_size = int(h_crop / zoom_out_scale)
+            half = larger_size // 2
+            zoom_crops = []
+            for y1, x1, y2, x2 in batch_tiles_info:
+                cy = (y1 + y2) // 2
+                cx = (x1 + x2) // 2
+                top = cy + pad_offset - half
+                left = cx + pad_offset - half
+                z = inputs[
+                    :,
+                    :,
+                    top : top + larger_size,
+                    left : left + larger_size,
+                ]
+                z = fn.interpolate(
+                    z,
+                    size=(h_crop, w_crop),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                zoom_crops.append(z)
+            zoom_crops = torch.cat(zoom_crops, dim=0)
+            all_crops = torch.cat([crops, zoom_crops], dim=0)
+        else:
+            all_crops = crops
+
         with torch.no_grad():
-            # print(f"Crops shape: {crops.shape}")
-            # print(f"Wavelengths shape: {wavelengths.shape}")
             crop_preds = segmentation_model.predict(
-                crops,
+                all_crops,
                 wavelengths,
-                rescale_to=crops.shape[2:],
+                rescale_to=(h_crop, w_crop),
             )
 
-        # Blend predictions into accumulator
+        if use_zoom_out_tta:
+            b = crops.shape[0]
+            pred_id = crop_preds[:b]
+            pred_zoom = crop_preds[b:]
+            pred_zoom_inv = _inverse_zoom_out_logits(
+                pred_zoom,
+                zoom_out_scale,
+                (h_crop, w_crop),
+            )
+            crop_preds = (pred_id + pred_zoom_inv) / 2.0
+
         for crop_pred, (y1, x1, y2, x2) in zip(
             crop_preds,
             batch_tiles_info,
@@ -130,6 +265,11 @@ class GeoTiffSegmentationInference:
         batch_size: int = 16,
         chunk_size: int = 4096,
         num_classes: int | None = None,
+        *,
+        use_radiometric_tta: bool = False,
+        use_geometric_tta: bool = False,
+        use_zoom_out_tta: bool = False,
+        zoom_out_scale: float = _ZOOM_OUT_SCALE,
     ) -> None:
         """
         Initialize inference engine.
@@ -145,6 +285,10 @@ class GeoTiffSegmentationInference:
             batch_size: Number of tiles to process simultaneously
             chunk_size: Size of chunks to read from geotiff
             num_classes: Required when checkpoint_path is an exported model (.pt2)
+            use_radiometric_tta: If True, average over radiometric views (orig + CLAHE)
+            use_geometric_tta: If True, geometric views (id, hflip, vflip, rot180)
+            use_zoom_out_tta: If True, zoom-out view
+            zoom_out_scale: Scale for zoom-out window (e.g. 0.9)
 
         """
         if Path(checkpoint_path).suffix == ".pt2" and num_classes is None:
@@ -156,6 +300,10 @@ class GeoTiffSegmentationInference:
         self.overlap = overlap
         self.batch_size = batch_size
         self.chunk_size = chunk_size
+        self.use_radiometric_tta = use_radiometric_tta
+        self.use_geometric_tta = use_geometric_tta
+        self.use_zoom_out_tta = use_zoom_out_tta
+        self.zoom_out_scale = zoom_out_scale
 
         # Store normalization stats
         self.mean = mean
@@ -216,17 +364,78 @@ class GeoTiffSegmentationInference:
         if self._exported_module is not None:
             c = x.shape[1]
             mean_t = torch.as_tensor(
-                self.mean[:c], dtype=torch.float32, device=x.device,
+                self.mean[:c],
+                dtype=torch.float32,
+                device=x.device,
             )
             std_t = torch.as_tensor(
-                self.std[:c], dtype=torch.float32, device=x.device,
+                self.std[:c],
+                dtype=torch.float32,
+                device=x.device,
             )
-            out = self._exported_module(x, mean_t, std_t, wavelengths)
-            logits = out[0] if isinstance(out, tuple) else out
+            if self.use_radiometric_tta and self.use_geometric_tta:
+                # 50-50 mix: L_rad (2 views) + L_geo (4 views), 6 forwards
+                x01 = (x / 255.0).clamp(0.0, 1.0)
+                rad_views = _radiometric_tta_views(x01)
+                l_rad_sum = None
+                for view in rad_views:
+                    view_raw = (view * 255.0).clamp(0.0, 255.0)
+                    out = self._exported_module(
+                        view_raw, mean_t, std_t, wavelengths,
+                    )
+                    li = out[0] if isinstance(out, tuple) else out
+                    l_rad_sum = li if l_rad_sum is None else l_rad_sum + li
+                l_rad = l_rad_sum / len(rad_views)
+                geo_views = _geometric_tta_views(x)
+                l_geo_sum = None
+                for crops_g, inv in geo_views:
+                    out = self._exported_module(
+                        crops_g, mean_t, std_t, wavelengths,
+                    )
+                    li = out[0] if isinstance(out, tuple) else out
+                    inv_li = inv(li)
+                    l_geo_sum = (
+                        inv_li if l_geo_sum is None else l_geo_sum + inv_li
+                    )
+                l_geo = l_geo_sum / len(geo_views)
+                logits = (l_rad + l_geo) / 2.0
+            else:
+                pairs = _build_tta_pairs(
+                    x,
+                    use_radiometric=self.use_radiometric_tta,
+                    use_geometric=self.use_geometric_tta,
+                )
+                if not pairs:
+                    out = self._exported_module(
+                        x, mean_t, std_t, wavelengths,
+                    )
+                    logits = out[0] if isinstance(out, tuple) else out
+                else:
+                    it = iter(pairs)
+                    view_raw, inv = next(it)
+                    out = self._exported_module(
+                        view_raw,
+                        mean_t,
+                        std_t,
+                        wavelengths,
+                    )
+                    li = out[0] if isinstance(out, tuple) else out
+                    logits_sum = inv(li)
+                    n = len(pairs)
+                    for view_raw, inv in it:
+                        out = self._exported_module(
+                            view_raw,
+                            mean_t,
+                            std_t,
+                            wavelengths,
+                        )
+                        li = out[0] if isinstance(out, tuple) else out
+                        logits_sum = logits_sum + inv(li)
+                    logits = logits_sum / n
         else:
             return self.model.predict(x, wavelengths, rescale_to=rescale_to)
         if rescale_to is not None:
-            logits = torch.nn.functional.interpolate(
+            logits = fn.interpolate(
                 logits,
                 size=rescale_to,
                 mode="bilinear",
@@ -387,6 +596,8 @@ class GeoTiffSegmentationInference:
                 crop_size=(self.tile_size, self.tile_size),
                 stride=(stride, stride),
                 batch_size=self.batch_size,
+                use_zoom_out_tta=self.use_zoom_out_tta,
+                zoom_out_scale=self.zoom_out_scale,
             )
 
         # pred shape: (1, C, H, W)
