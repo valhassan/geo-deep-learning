@@ -53,13 +53,18 @@ show_gpu_status
 
 
 python $INFERENCE_SCRIPT \
-    --checkpoint /home/valhassa/Projects/geo-deep-learning/experiments/model/dofav2_dev_2.pt2 \
-    --input /export/sata01/wspace/test_dir/multi/demo/image/NS2-058651012010_01_P001-WV02-NRGB.tif \
-    --output /export/sata01/wspace/test_dir/multi/demo/prediction/ns2_wv2_dofav2_geoaware_pt2_0.599_NRGB.tif \
-    --mean 0.2604 0.1014 0.1360 0.1296 \
-    --std 0.2099 0.1102 0.1230 0.1107 \
-    --wavelengths 0.8325 0.6599999999999999 0.5449999999999999 0.48 \
-    --num-classes 5
+    --checkpoint /export/sata01/wspace/test_dir/multi/demo/pt2/dofav2_47_0.599.pt2 \
+    --input /export/sata01/wspace/test_dir/multi/demo/image/ns2_small_rgbn.tif \
+    --output /export/sata01/wspace/test_dir/multi/demo/prediction/ns2_small_rgbn_tta_10_32_32_mix_zoom_out_0.5.tif \
+    --mean 0.1014 0.1360 0.1296 0.2604 \
+    --std 0.1102 0.1230 0.1107 0.2099 \
+    --wavelengths 0.6599999999999999 0.5449999999999999 0.48 0.8325 \
+    --num-classes 5 \
+    --batch-size 8 \
+    --radiometric-tta \
+    --geometric-tta \
+    --zoom-out-tta \
+    --zoom-out-scale 0.5
 
 # python $COMPARE_SCRIPT \
 #   --checkpoint /export/sata01/wspace/test_dir/multi/all_rgb_data/dofav2.ckpt \
