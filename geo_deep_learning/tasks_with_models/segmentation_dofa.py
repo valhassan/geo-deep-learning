@@ -465,16 +465,13 @@ class SegmentationDOFA(LightningModule):
             return num_samples
 
 
-class _ExportTTAWrapper(nn.Module):
+class _ExportWrapper(nn.Module):
     """
-    DOFA export with band-combo TTA; three combos derived from C.
+    DOFA export: single forward, norm + standardize then model.
 
     Inputs: x (B,C,H,W), mean (C,), std (C,), wavelengths (C,).
-    Combos: identity, reverse first 3, last-band first (all from C).
+    Returns logits (no TTA).
     """
-
-    _NUM_COMBOS = 3
-    _REV_FIRST_LAST = 2  # last index of "first 3" for rev combo
 
     def __init__(self, model: nn.Module) -> None:
         super().__init__()
@@ -488,52 +485,14 @@ class _ExportTTAWrapper(nn.Module):
         wavelengths: Tensor,
     ) -> Tensor:
         c = x.shape[1]
-        dev = x.device
         mean = mean.view(c, 1, 1)
         std = std.view(c, 1, 1)
-        base = torch.arange(c, device=dev)
-        idx0 = base
-        # (2, 1, 0, 3, 4, ...) via where — no empty arange, tracer-friendly
-        idx1 = torch.where(
-            base == 0,
-            2,
-            torch.where(
-                base == 1,
-                1,
-                torch.where(base == self._REV_FIRST_LAST, 0, base),
-            ),
-        )
-        # (c-1, 0, 1, ..., c-2): last band first
-        last_idx = base[-1]
-        idx2 = torch.where(base == 0, last_idx, base - 1)
-        x0 = standardization(
-            normalization(x[:, idx0]),
-            mean[idx0],
-            std[idx0],
-        )
-        x1 = standardization(
-            normalization(x[:, idx1]),
-            mean[idx1],
-            std[idx1],
-        )
-        x2 = standardization(
-            normalization(x[:, idx2]),
-            mean[idx2],
-            std[idx2],
-        )
-        l0 = self.model(x0, wavelengths[idx0]).out
-        l1 = self.model(x1, wavelengths[idx1]).out
-        l2 = self.model(x2, wavelengths[idx2]).out
-        return (l0 + l1 + l2) / float(self._NUM_COMBOS)
+        x = standardization(normalization(x), mean, std)
+        return self.model(x, wavelengths).out
 
 
 def export_model(checkpoint_path: str, output_path: str) -> None:
-    """
-    Export DOFA with band-combo TTA.
-
-    Inputs: x (B,C,H,W), mean (C,), std (C,), wavelengths (C,).
-    Three combos (identity, rev first 3, last first) derived from C.
-    """
+    """Export DOFA: (x, mean, std, wavelengths) -> logits, single forward."""
     device = "cuda"
     model_class = SegmentationDOFA.load_from_checkpoint(
         checkpoint_path,
@@ -543,11 +502,12 @@ def export_model(checkpoint_path: str, output_path: str) -> None:
     )
     model = model_class.model
     model.eval().cuda()
-    wrapper = _ExportTTAWrapper(model).cuda()
-    batch_dim = torch.export.Dim("batch", min=1, max=int(404.5432096881631))
+    wrapper = _ExportWrapper(model).cuda()
+    batch_size = int(404.5432096881631) # quirk of torch export for dynamic batch size
+    batch_dim = torch.export.Dim("batch", min=1, max=batch_size)
     channels_dim = torch.export.Dim("channels", min=1, max=8)
-    c = 8
-    x = torch.randn(int(404.5432096881631), c, 512, 512, device=device)
+    c = 4
+    x = torch.randn(batch_size, c, 512, 512, device=device)
     mean = torch.randn(c, device=device)
     std = torch.randn(c, device=device).abs() + 1e-5
     wavelengths = torch.randn(c, device=device, dtype=torch.float32)
