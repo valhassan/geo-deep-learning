@@ -49,6 +49,7 @@ class SegmentationDOFA(LightningModule):
         freeze_layers: list[str] | None = None,
         class_labels: list[str] | None = None,
         class_colors: list[str] | None = None,
+        load_parts: str | list[str] | None = None,
         weights_from_checkpoint_path: str | None = None,
         **kwargs: object,  # noqa: ARG002
     ) -> None:
@@ -60,6 +61,7 @@ class SegmentationDOFA(LightningModule):
         self.image_size = image_size
         self.freeze_layers = freeze_layers
         self.weights_from_checkpoint_path = weights_from_checkpoint_path
+        self.load_parts = load_parts
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.scheduler_config = scheduler_config or {"interval": "epoch"}
@@ -90,39 +92,17 @@ class SegmentationDOFA(LightningModule):
                 align_corners=False,
                 keepdim=True,
             ),
-            krn.augmentation.RandomResizedCrop(
-                size=self.image_size,
-                scale=(0.5, 1.0),
-                ratio=(0.8, 1.25),
-                p=0.5,
-                align_corners=False,
-                keepdim=True,
-            ),
             data_keys=["image", "mask"],
-            random_apply=False,
+            random_apply=1,
         )
 
     def _radiometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
-            krn.augmentation.RandomBrightness(
-                brightness=(0.0, 0.45),
+            krn.augmentation.RandomClahe(
+                clip_limit=(10.0, 10.0),
+                grid_size=(32, 32),
+                slow_and_differentiable=False,
                 p=0.7,
-                keepdim=True,
-            ),
-            krn.augmentation.RandomContrast(
-                contrast=(0.6, 2.0),
-                p=0.65,
-                keepdim=True,
-            ),
-            krn.augmentation.RandomGamma(
-                gamma=(0.6, 1.7),
-                p=0.4,
-                keepdim=True,
-            ),
-            krn.augmentation.RandomGaussianNoise(
-                mean=0.0,
-                std=0.01,
-                p=0.25,
                 keepdim=True,
             ),
             data_keys=["image"],
@@ -159,7 +139,7 @@ class SegmentationDOFA(LightningModule):
         )
         if self.weights_from_checkpoint_path:
             map_location = self.device
-            load_parts = self.hparams.get("load_parts")
+            load_parts = self.load_parts
             logger.info(
                 "Loading weights from checkpoint: %s",
                 self.weights_from_checkpoint_path,
@@ -266,13 +246,7 @@ class SegmentationDOFA(LightningModule):
         """On after batch transfer."""
         if self.trainer.training:
             x, y = self.geometric_aug(batch["image"], batch["mask"])
-            if y.dtype != batch["mask"].dtype:
-                y = y.round().to(batch["mask"].dtype)
             batch["mask"] = y
-
-            if x.dtype == torch.uint8:
-                x = x.float().div_(255.0)
-
             x = self.radiometric_aug(x)
             batch["image"] = torch.clamp(x, 0.0, 1.0)
 
