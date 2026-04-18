@@ -159,7 +159,6 @@ class ShardedDataset:
         split: str = "trn",
         batch_size: int = 16,
         shuffle_buffer: int = 1000,
-        shardshuffle: int | None = None,
         seed: int = 42,
         epoch_size: int | None = None,
         mean: list[float] | None = None,
@@ -179,7 +178,6 @@ class ShardedDataset:
             split: Data split - "trn", "val", "tst"
             batch_size: Batch size
             shuffle_buffer: Number of batches to prefetch for shuffling
-            shardshuffle: Number of shards to shuffle
             seed: Random seed for shuffling
             epoch_size: Size of epoch (for infinite streaming)
             mean: Optional list of mean values for normalization
@@ -197,7 +195,6 @@ class ShardedDataset:
         self.batch_size = batch_size
         self.epoch_size = epoch_size
         self.shuffle_buffer = shuffle_buffer
-        self.shardshuffle = shardshuffle
         self.patch_count = patch_count
         self.band_indices = band_indices
         self.norm_stats = self._load_normalization_stats(
