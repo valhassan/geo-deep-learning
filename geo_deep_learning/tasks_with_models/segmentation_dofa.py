@@ -80,7 +80,6 @@ class SegmentationDOFA(LightningModule):
         self._total_samples_visualized = 0
 
         self.geometric_aug = self._geometric_aug()
-        self.radiometric_aug = self._radiometric_aug()
 
     def _geometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
@@ -94,19 +93,6 @@ class SegmentationDOFA(LightningModule):
             ),
             data_keys=["image", "mask"],
             random_apply=1,
-        )
-
-    def _radiometric_aug(self) -> AugmentationSequential:
-        return AugmentationSequential(
-            krn.augmentation.RandomClahe(
-                clip_limit=(10.0, 10.0),
-                grid_size=(32, 32),
-                slow_and_differentiable=False,
-                p=0.7,
-                keepdim=True,
-            ),
-            data_keys=["image"],
-            random_apply=False,
         )
 
     def state_dict(
@@ -154,7 +140,6 @@ class SegmentationDOFA(LightningModule):
     def on_fit_start(self) -> None:
         """On fit start."""
         self.geometric_aug = self.geometric_aug.to(self.device)
-        self.radiometric_aug = self.radiometric_aug.to(self.device)
 
     def configure_optimizers(self) -> list[list[dict[str, Any]]]:
         """Configure optimizers."""
@@ -246,10 +231,8 @@ class SegmentationDOFA(LightningModule):
         """On after batch transfer."""
         if self.trainer.training:
             x, y = self.geometric_aug(batch["image"], batch["mask"])
+            batch["image"] = x
             batch["mask"] = y
-            x = self.radiometric_aug(x)
-            batch["image"] = torch.clamp(x, 0.0, 1.0)
-
         batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
         return batch
 
