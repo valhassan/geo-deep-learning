@@ -28,7 +28,6 @@ class MultiSensorDataModule(LightningDataModule):
         num_workers: int = 0,
         prefetch_factor: int | None = None,
         shuffle_buffer: int = 0,
-        shardshuffle: int | None = None,
         seed: int | None = None,
     ) -> None:
         """
@@ -45,7 +44,6 @@ class MultiSensorDataModule(LightningDataModule):
             num_workers: Number of worker processes
             prefetch_factor: Number of batches to prefetch
             shuffle_buffer: Number of batches to prefetch for shuffling
-            shardshuffle: Number of shards to shuffle
             seed: Random seed for shuffling
 
         """
@@ -57,7 +55,6 @@ class MultiSensorDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
         self.shuffle_buffer = shuffle_buffer
-        self.shardshuffle = shardshuffle
         self.seed = seed
         self.patch_size = patch_size
         self.mean = mean
@@ -85,7 +82,6 @@ class MultiSensorDataModule(LightningDataModule):
             mean=self.mean,
             std=self.std,
             shuffle_buffer=self.shuffle_buffer,
-            shardshuffle=self.shardshuffle,
             seed=self.seed,
         )
         self._compute_patch_counts()
