@@ -14,6 +14,7 @@ from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
 from torch import Tensor, nn
 
 from geo_deep_learning.models.segmentation.dofa import DOFASegmentationModel
+from geo_deep_learning.tools.augmentation.gridmask import FastGridMask
 from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
     denormalization,
@@ -80,6 +81,7 @@ class SegmentationDOFA(LightningModule):
         self._total_samples_visualized = 0
 
         self.geometric_aug = self._geometric_aug()
+        self.gridmask = FastGridMask(grid_size=64, mask_ratio=0.5, p=0.5)
 
     def _geometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
@@ -223,6 +225,19 @@ class SegmentationDOFA(LightningModule):
             return logits.sigmoid()
         return logits.softmax(dim=1)
 
+    def on_train_epoch_start(self) -> None:
+        """On train epoch start."""
+        # Dynamically scale GridMask probability once per epoch.
+        max_p = 0.5
+        ramp_up_epochs = 15
+        current_epoch = self.trainer.current_epoch
+        if current_epoch >= ramp_up_epochs:
+            new_p = max_p
+        else:
+            new_p = max_p * (current_epoch / ramp_up_epochs)
+        self.gridmask.p = new_p
+        self.log("gridmask_p", new_p, on_step=False, on_epoch=True, sync_dist=True)
+
     def on_after_batch_transfer(
         self,
         batch: dict[str, Any],
@@ -234,6 +249,8 @@ class SegmentationDOFA(LightningModule):
             batch["image"] = x
             batch["mask"] = y
         batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
+        if self.trainer.training:
+            batch["image"] = self.gridmask(batch["image"])
         return batch
 
     def training_step(
@@ -460,7 +477,7 @@ def export_model(checkpoint_path: str, output_path: str) -> None:
     model = model_class.model
     model.eval().cuda()
     wrapper = _ExportWrapper(model).cuda()
-    batch_size = int(404.5432096881631) # quirk of torch export for dynamic batch size
+    batch_size = int(404.5432096881631)  # quirk of torch export for dynamic batch size
     batch_dim = torch.export.Dim("batch", min=1, max=batch_size)
     channels_dim = torch.export.Dim("channels", min=1, max=8)
     c = 4
