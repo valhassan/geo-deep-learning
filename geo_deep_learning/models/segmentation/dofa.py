@@ -29,6 +29,7 @@ class DOFASegmentationModel(BaseSegmentationModel):
         num_classes: int = 1,
         *,
         pretrained: bool = True,
+        use_sigreg: bool = False,
     ) -> None:
         """Initialize DOFA segmentation model."""
         super().__init__(
@@ -38,7 +39,7 @@ class DOFASegmentationModel(BaseSegmentationModel):
             SegmentationHead,
             SegmentationOutput,
         )
-
+        self.use_sigreg = use_sigreg
         if encoder == "dofa_base":
             self.embed_dim = 768
             self.encoder = create_dofa_base(img_size=image_size, pretrained=pretrained)
@@ -65,6 +66,19 @@ class DOFASegmentationModel(BaseSegmentationModel):
         )
 
         self.head = SegmentationHead(in_channels=256, num_classes=num_classes)
+
+        if self.use_sigreg:
+            self.projection_head = torch.nn.Sequential(
+                torch.nn.AdaptiveAvgPool2d(1),
+                torch.nn.Flatten(),
+                torch.nn.Linear(self.embed_dim, 2048),
+                torch.nn.BatchNorm1d(2048),
+                torch.nn.GELU(),
+                torch.nn.Linear(2048, 2048),
+                torch.nn.BatchNorm1d(2048),
+                torch.nn.GELU(),
+                torch.nn.Linear(2048, 16),
+            )
 
         if freeze_layers:
             self._freeze_layers(layers=freeze_layers)
@@ -94,8 +108,11 @@ class DOFASegmentationModel(BaseSegmentationModel):
             mode="bilinear",
             align_corners=False,
         )
+        aux_dict = {"aux": aux_x}
+        if self.use_sigreg:
+            aux_dict["sigreg_embedding"] = self.projection_head(feats[-1])
 
-        return SegmentationOutput(out=x, aux={"aux": aux_x})
+        return SegmentationOutput(out=x, aux=aux_dict)
 
 
 if __name__ == "__main__":
