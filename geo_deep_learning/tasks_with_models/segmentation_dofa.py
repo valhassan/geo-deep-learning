@@ -15,6 +15,7 @@ from torch import Tensor, nn
 
 from geo_deep_learning.models.segmentation.dofa import DOFASegmentationModel
 from geo_deep_learning.tools.augmentation.gridmask import FastGridMask
+from geo_deep_learning.tools.losses.lejepa import SIGReg
 from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
     denormalization,
@@ -52,6 +53,8 @@ class SegmentationDOFA(LightningModule):
         class_colors: list[str] | None = None,
         load_parts: str | list[str] | None = None,
         weights_from_checkpoint_path: str | None = None,
+        use_sigreg: bool = False,
+        lambda_sig: float = 0.05,
         **kwargs: object,  # noqa: ARG002
     ) -> None:
         """Initialize the model."""
@@ -71,6 +74,8 @@ class SegmentationDOFA(LightningModule):
         self.num_classes = num_classes
         self.threshold = 0.5
         self.loss = loss
+        self.use_sigreg = use_sigreg
+        self.lambda_sig = lambda_sig
         num_classes = num_classes + 1 if num_classes == 1 else num_classes
         self.labels = (
             [str(i) for i in range(num_classes)]
@@ -82,6 +87,9 @@ class SegmentationDOFA(LightningModule):
 
         self.geometric_aug = self._geometric_aug()
         self.gridmask = FastGridMask(grid_size=64, mask_ratio=0.5, p=0.5)
+
+        if self.use_sigreg:
+            self.sigreg = SIGReg(num_slices=256)
 
     def _geometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
@@ -267,10 +275,20 @@ class SegmentationDOFA(LightningModule):
         outputs = self(x, wv)
         loss_main = self.loss(outputs.out, y)
         loss_aux = self.loss(outputs.aux["aux"], y)
-        loss = loss_main + 0.4 * loss_aux
-        self.log(
-            "train_loss",
-            loss,
+        seg_loss = loss_main + 0.4 * loss_aux
+        total_loss = seg_loss
+        metrics = {
+            "seg_loss": seg_loss,
+        }
+
+        if self.use_sigreg and "sigreg_embedding" in outputs.aux:
+            sigreg_loss = self.sigreg(outputs.aux["sigreg_embedding"])
+            total_loss += self.lambda_sig * sigreg_loss
+            metrics["sigreg_loss"] = sigreg_loss
+
+        metrics["train_loss"] = total_loss
+        self.log_dict(
+            metrics,
             batch_size=batch_size,
             prog_bar=True,
             logger=True,
@@ -280,7 +298,7 @@ class SegmentationDOFA(LightningModule):
             rank_zero_only=False,
         )
 
-        return loss
+        return total_loss
 
     def validation_step(
         self,
