@@ -132,6 +132,7 @@ class SegmentationDOFA(LightningModule):
             freeze_layers=self.freeze_layers,
             num_classes=self.num_classes,
             pretrained=self.pretrained,
+            use_sigreg=self.use_sigreg,
         )
         if self.weights_from_checkpoint_path:
             map_location = self.device
