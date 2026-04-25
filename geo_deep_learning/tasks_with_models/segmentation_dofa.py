@@ -284,7 +284,7 @@ class SegmentationDOFA(LightningModule):
 
         if self.use_sigreg and "sigreg_embedding" in outputs.aux:
             sigreg_loss = self.sigreg(outputs.aux["sigreg_embedding"])
-            total_loss += self.lambda_sig * sigreg_loss
+            total_loss = total_loss + (self.lambda_sig * sigreg_loss)
             metrics["sigreg_loss"] = sigreg_loss
 
         metrics["train_loss"] = total_loss
