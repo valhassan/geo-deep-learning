@@ -8,6 +8,7 @@ from typing import Any
 
 import kornia as krn
 import torch
+import torch.nn.functional as fn
 from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
@@ -55,6 +56,7 @@ class SegmentationDOFA(LightningModule):
         weights_from_checkpoint_path: str | None = None,
         use_sigreg: bool = False,
         lambda_sig: float = 0.05,
+        lambda_jepa: float = 0.05,
         **kwargs: object,  # noqa: ARG002
     ) -> None:
         """Initialize the model."""
@@ -76,6 +78,7 @@ class SegmentationDOFA(LightningModule):
         self.loss = loss
         self.use_sigreg = use_sigreg
         self.lambda_sig = lambda_sig
+        self.lambda_jepa = lambda_jepa
         num_classes = num_classes + 1 if num_classes == 1 else num_classes
         self.labels = (
             [str(i) for i in range(num_classes)]
@@ -86,10 +89,14 @@ class SegmentationDOFA(LightningModule):
         self._total_samples_visualized = 0
 
         self.geometric_aug = self._geometric_aug()
-        self.gridmask = FastGridMask(grid_size=64, mask_ratio=0.5, p=0.5)
-
+        self.gridmask = FastGridMask(grid_size=64, mask_ratio=0.6, p=0.5)
         if self.use_sigreg:
+            if encoder == "dofa_base":
+                embed_dim = 768
+            elif encoder == "dofa_large":
+                embed_dim = 1024
             self.sigreg = SIGReg(num_slices=256)
+            self.sigreg_proj = nn.Linear(embed_dim, 256)
 
     def _geometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
@@ -132,7 +139,6 @@ class SegmentationDOFA(LightningModule):
             freeze_layers=self.freeze_layers,
             num_classes=self.num_classes,
             pretrained=self.pretrained,
-            use_sigreg=self.use_sigreg,
         )
         if self.weights_from_checkpoint_path:
             map_location = self.device
@@ -234,19 +240,6 @@ class SegmentationDOFA(LightningModule):
             return logits.sigmoid()
         return logits.softmax(dim=1)
 
-    def on_train_epoch_start(self) -> None:
-        """On train epoch start."""
-        # Dynamically scale GridMask probability once per epoch.
-        max_p = 0.5
-        ramp_up_epochs = 15
-        current_epoch = self.trainer.current_epoch
-        if current_epoch >= ramp_up_epochs:
-            new_p = max_p
-        else:
-            new_p = max_p * (current_epoch / ramp_up_epochs)
-        self.gridmask.p = new_p
-        self.log("gridmask_p", new_p, on_step=False, on_epoch=True, sync_dist=True)
-
     def on_after_batch_transfer(
         self,
         batch: dict[str, Any],
@@ -258,8 +251,6 @@ class SegmentationDOFA(LightningModule):
             batch["image"] = x
             batch["mask"] = y
         batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
-        if self.trainer.training:
-            batch["image"] = self.gridmask(batch["image"])
         return batch
 
     def training_step(
@@ -274,6 +265,7 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
+
         loss_main = self.loss(outputs.out, y)
         loss_aux = self.loss(outputs.aux["aux"], y)
         seg_loss = loss_main + 0.4 * loss_aux
@@ -281,13 +273,34 @@ class SegmentationDOFA(LightningModule):
         metrics = {
             "seg_loss": seg_loss,
         }
+        if self.use_sigreg:
+            x_ = self.gridmask(x.clone())
+            orig_feat = outputs.aux["feat"]
+            new_feat = self.model.forward_encoder(x_, wv)[-1]
+            b, c, _, _ = orig_feat.shape
+            z_orig = orig_feat.permute(0, 2, 3, 1).reshape(b, -1, c)
+            z_new = new_feat.permute(0, 2, 3, 1).reshape(b, -1, c)
+            jepa_loss = fn.mse_loss(z_new, z_orig.detach())
+            z_new_proj = self.sigreg_proj(z_new)
+            n = z_new_proj.shape[1]
+            m = min(256, n)
+            idx = torch.randint(n, (b, m), device=z_new_proj.device)
+            idx = idx.unsqueeze(-1).expand(-1, -1, z_new_proj.shape[-1])
+            z_new_proj = z_new_proj.gather(1, idx)
+            sigreg_loss = self.sigreg(z_new_proj)
+            total_loss = (
+                total_loss
+                + (self.lambda_jepa * jepa_loss)
+                + (self.lambda_sig * sigreg_loss)
+            )
+            metrics.update(
+                {
+                    "jepa_loss": jepa_loss,
+                    "sigreg_loss": sigreg_loss,
+                },
+            )
 
-        if self.use_sigreg and "sigreg_embedding" in outputs.aux:
-            sigreg_loss = self.sigreg(outputs.aux["sigreg_embedding"])
-            total_loss = total_loss + (self.lambda_sig * sigreg_loss)
-            metrics["sigreg_loss"] = sigreg_loss
-
-        metrics["train_loss"] = total_loss
+        metrics.update({"train_loss": total_loss})
         self.log_dict(
             metrics,
             batch_size=batch_size,
