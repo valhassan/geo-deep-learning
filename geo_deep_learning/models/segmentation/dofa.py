@@ -21,6 +21,8 @@ from .base import BaseSegmentationModel
 class DOFASegmentationModel(BaseSegmentationModel):
     """DOFA segmentation model."""
 
+    _BATCHED_WAVELENGTHS_NDIM = 2
+
     def __init__(
         self,
         encoder: str = "dofa_base",
@@ -29,7 +31,6 @@ class DOFASegmentationModel(BaseSegmentationModel):
         num_classes: int = 1,
         *,
         pretrained: bool = True,
-        use_sigreg: bool = False,
     ) -> None:
         """Initialize DOFA segmentation model."""
         super().__init__(
@@ -39,7 +40,6 @@ class DOFASegmentationModel(BaseSegmentationModel):
             SegmentationHead,
             SegmentationOutput,
         )
-        self.use_sigreg = use_sigreg
         if encoder == "dofa_base":
             self.embed_dim = 768
             self.encoder = create_dofa_base(img_size=image_size, pretrained=pretrained)
@@ -67,52 +67,76 @@ class DOFASegmentationModel(BaseSegmentationModel):
 
         self.head = SegmentationHead(in_channels=256, num_classes=num_classes)
 
-        if self.use_sigreg:
-            self.projection_head = torch.nn.Sequential(
-                torch.nn.AdaptiveAvgPool2d(1),
-                torch.nn.Flatten(),
-                torch.nn.Linear(self.embed_dim, 2048),
-                torch.nn.BatchNorm1d(2048),
-                torch.nn.GELU(),
-                torch.nn.Linear(2048, 2048),
-                torch.nn.BatchNorm1d(2048),
-                torch.nn.GELU(),
-                torch.nn.Linear(2048, 16),
-            )
-
         if freeze_layers:
             self._freeze_layers(layers=freeze_layers)
 
-    def forward(self, x: torch.Tensor, wavelengths: torch.Tensor) -> SegmentationOutput:
-        """Forward pass."""
-        expected_ndim = 2
-        if wavelengths.dim() == expected_ndim:
-            wavelengths = wavelengths[0]  # DOFA expects a single wavelength
+    @staticmethod
+    def _normalize_wavelengths(wavelengths: torch.Tensor) -> torch.Tensor:
+        if wavelengths.dim() == DOFASegmentationModel._BATCHED_WAVELENGTHS_NDIM:
+            return wavelengths[0]  # DOFA expects a single wavelength
+        return wavelengths
+
+    def forward_encoder(
+        self,
+        x: torch.Tensor,
+        wavelengths: torch.Tensor,
+    ) -> list[torch.Tensor]:
+        """Encoder-only forward. Returns multi-scale feature maps."""
+        wavelengths = self._normalize_wavelengths(wavelengths)
+        return self.encoder(x, wavelengths)
+
+    def forward_decoder(
+        self,
+        feats: list[torch.Tensor],
+        *,
+        image_size: tuple[int, int],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run decoder + heads and return logits."""
+        logits = self.decoder(feats)
+        logits = self.head(logits)
+        logits = fn.interpolate(
+            input=logits,
+            size=image_size,
+            scale_factor=None,
+            mode="bilinear",
+            align_corners=False,
+        )
+
+        aux_logits = self.aux_head(feats[2])
+        aux_logits = fn.interpolate(
+            input=aux_logits,
+            size=image_size,
+            scale_factor=None,
+            mode="bilinear",
+            align_corners=False,
+        )
+        return logits, aux_logits
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        wavelengths: torch.Tensor,
+        *,
+        return_feat: bool = True,
+    ) -> SegmentationOutput:
+        """
+        Run full segmentation forward.
+
+        Args:
+            x: Input image tensor (B, C, H, W).
+            wavelengths: Wavelength tensor (B, C) or (C,).
+            return_feat: If True, include last encoder feature map in aux as "feat".
+
+        """
         image_size = x.shape[2:]
-        feats = self.encoder(x, wavelengths)
-        x = self.decoder(feats)
-        x = self.head(x)
-        x = fn.interpolate(
-            input=x,
-            size=image_size,
-            scale_factor=None,
-            mode="bilinear",
-            align_corners=False,
-        )
+        feats = self.forward_encoder(x, wavelengths)
+        logits, aux_logits = self.forward_decoder(feats, image_size=image_size)
 
-        aux_x = self.aux_head(feats[2])
-        aux_x = fn.interpolate(
-            input=aux_x,
-            size=image_size,
-            scale_factor=None,
-            mode="bilinear",
-            align_corners=False,
-        )
-        aux_dict = {"aux": aux_x}
-        if self.use_sigreg:
-            aux_dict["sigreg_embedding"] = self.projection_head(feats[-1])
+        aux_dict: dict[str, torch.Tensor] = {"aux": aux_logits}
+        if return_feat:
+            aux_dict["feat"] = feats[-1]
 
-        return SegmentationOutput(out=x, aux=aux_dict)
+        return SegmentationOutput(out=logits, aux=aux_dict)
 
 
 if __name__ == "__main__":
