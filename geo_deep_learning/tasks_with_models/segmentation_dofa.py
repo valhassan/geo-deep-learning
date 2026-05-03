@@ -89,7 +89,7 @@ class SegmentationDOFA(LightningModule):
         self._total_samples_visualized = 0
 
         self.geometric_aug = self._geometric_aug()
-        self.gridmask = FastGridMask(grid_size=64, mask_ratio=0.6, p=0.5)
+        self.gridmask = FastGridMask(grid_size=64, mask_ratio=0.6, p=1.0)
         if self.use_sigreg:
             if encoder == "dofa_base":
                 embed_dim = 768
@@ -97,6 +97,9 @@ class SegmentationDOFA(LightningModule):
                 embed_dim = 1024
             self.sigreg = SIGReg(num_slices=256)
             self.sigreg_proj = nn.Linear(embed_dim, 256)
+            self.jepa_predictor = nn.Sequential(nn.Linear(embed_dim, embed_dim),
+                                                nn.GELU(),
+                                                nn.Linear(embed_dim, embed_dim))
 
     def _geometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
@@ -280,7 +283,10 @@ class SegmentationDOFA(LightningModule):
             b, c, _, _ = orig_feat.shape
             z_orig = orig_feat.permute(0, 2, 3, 1).reshape(b, -1, c)
             z_new = new_feat.permute(0, 2, 3, 1).reshape(b, -1, c)
-            jepa_loss = fn.mse_loss(z_new, z_orig.detach())
+            z_orig = fn.layer_norm(z_orig, (z_orig.shape[-1],))
+            z_new  = fn.layer_norm(z_new,  (z_new.shape[-1],))
+            p_new = self.jepa_predictor(z_new)
+            jepa_loss = fn.mse_loss(p_new, z_orig.detach())
             z_new_proj = self.sigreg_proj(z_new)
             n = z_new_proj.shape[1]
             m = min(256, n)
