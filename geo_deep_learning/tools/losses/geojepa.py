@@ -190,15 +190,26 @@ class SIGReg(nn.Module):
 class GeoJEPALoss(nn.Module):
     """GeoJEPA SSL loss."""
 
-    def __init__(self, lambda_sig: float = 0.05, **kwargs: object) -> None:
+    def __init__(
+        self,
+        lambda_sig: float = 0.05,
+        n_samples: int = 512,
+        num_slices: int = 256,
+        **kwargs: object,
+    ) -> None:
         """Initialize the GeoJEPALoss."""
         super().__init__()
         self.lambda_sig = lambda_sig
-        self.sigreg = SIGReg(**kwargs)
+        self.n_samples = n_samples
+        self.sigreg = SIGReg(num_slices=num_slices, **kwargs)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Run the LeJEPALoss."""
+        """Run the GeoJEPALoss."""
         inv_loss = x.var(dim=0).mean()
         v, b, n, d = x.shape
-        sig_loss = self.sigreg(x.reshape(v * b, n, d))
+        tokens = x.reshape(v * b, n, d)
+        if self.n_samples is not None and self.n_samples < n:
+            idx = torch.randperm(n, device=x.device)[: self.n_samples]
+            tokens = tokens[:, idx, :]  # [V*B, n_samples, D]
+        sig_loss = self.sigreg(tokens)
         return (1.0 - self.lambda_sig) * inv_loss + self.lambda_sig * sig_loss
