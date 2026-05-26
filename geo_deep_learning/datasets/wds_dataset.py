@@ -264,24 +264,47 @@ class ShardedDataset:
             "metadata.json": metadata_dict
         }
         """
-        # Extract data
-        image = torch.from_numpy(sample["image_patch.npy"]).float()
-        label = torch.from_numpy(sample["label_patch.npy"]).long()
-        metadata = sample["metadata.json"]
+        if self.model_type in ["clay", "dofa", "unified"]:
+            # Extract data
+            image = torch.from_numpy(sample["image_patch.npy"]).float()
+            label = torch.from_numpy(sample["label_patch.npy"]).long()
+            metadata = sample["metadata.json"]
 
-        # Select bands before normalization
-        image = manage_bands(image, self.band_indices)
+            # Select bands before normalization
+            image = manage_bands(image, self.band_indices)
 
-        # Apply sensor-specific normalization
-        image = normalization(image)
+            # Apply sensor-specific normalization
+            image = normalization(image)
 
-        # Prepare output based on model type
-        if self.model_type == "clay":
-            return self._prepare_clay_output(image, label, metadata, sample["__key__"])
-        if self.model_type == "dofa":
-            return self._prepare_dofa_output(image, label, metadata, sample["__key__"])
-        # unified
-        return self._prepare_generic_output(image, label, metadata, sample["__key__"])
+            # Prepare output based on model type
+            if self.model_type == "clay":
+                return self._prepare_clay_output(image, label, metadata, sample["__key__"])
+            if self.model_type == "dofa":
+                return self._prepare_dofa_output(image, label, metadata, sample["__key__"])
+            if self.model_type == "unified":
+                return self._prepare_unified_output(image, label, metadata, sample["__key__"])
+
+        if self.model_type == "geojepa_ssl":
+            image_low = None
+            image_high = None
+            image = None
+            label = None
+            key = sample["__key__"]
+            metadata = sample["metadata.json"]
+            if "image_low.npy" in sample:
+                image_low = torch.from_numpy(sample["image_low.npy"]).float()
+                image_low = normalization(manage_bands(image_low, self.band_indices))
+            if "image_high.npy" in sample:
+                image_high = torch.from_numpy(sample["image_high.npy"]).float()
+                image_high = normalization(manage_bands(image_high, self.band_indices))
+            if "image_patch.npy" in sample:
+                image = torch.from_numpy(sample["image_patch.npy"]).float()
+                image = normalization(manage_bands(image, self.band_indices))
+            if "label_patch.npy" in sample:
+                label = torch.from_numpy(sample["label_patch.npy"]).long()
+        return self._prepare_geojepa_ssl_output(
+            image_low, image_high, image, label, metadata, key,
+        )
 
     def _prepare_clay_output(
         self,
@@ -337,6 +360,28 @@ class ShardedDataset:
     ) -> dict[str, Any]:
         """Prepare unified output with all metadata."""
         return {
+            "image": image,
+            "mask": label,
+            "platform": self.sensor_name,
+            "image_name": key,
+            "metadata": metadata,
+            "mean": self.norm_stats["mean"],
+            "std": self.norm_stats["std"],
+        }
+
+    def _prepare_geojepa_ssl_output( # noqa: PLR0913
+        self,
+        image_low: torch.Tensor | None,
+        image_high: torch.Tensor | None,
+        image: torch.Tensor | None,
+        label: torch.Tensor | None,
+        metadata: dict[str, Any],
+        key: str,
+    ) -> dict[str, Any]:
+        """Prepare output in GeoJEPA SSL format."""
+        return {
+            "image_low": image_low,
+            "image_high": image_high,
             "image": image,
             "mask": label,
             "platform": self.sensor_name,
