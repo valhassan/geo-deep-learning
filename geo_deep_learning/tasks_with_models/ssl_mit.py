@@ -7,9 +7,11 @@ from typing import Any
 
 import kornia as krn
 import torch
+import torch.nn.functional as fn
 from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
+from lightning.pytorch.utilities import rank_zero_only
 
 from geo_deep_learning.models.decoders.segformer_mlp import Decoder
 from geo_deep_learning.models.ssl.geojepa_mit import GeoJEPAMixTransformer
@@ -79,7 +81,6 @@ class SSLMixTransformer(LightningModule):
         self.geojepa_loss = GeoJEPALoss(lambda_sig=self.lambda_sig)
         self.geometric_aug = self._geometric_aug()
 
-        self.max_samples = max_samples
         self.class_colors = class_colors
         num_classes_for_iou = num_classes + 1 if num_classes == 1 else num_classes
         self.labels = (
@@ -89,6 +90,7 @@ class SSLMixTransformer(LightningModule):
         )
         self.iou = IoU(num_classes=num_classes_for_iou, ignore_index=255)
         self.threshold = 0.5
+        self.max_samples = max_samples
         self._total_samples_visualized = 0
 
     def _geometric_aug(self) -> AugmentationSequential:
@@ -177,7 +179,12 @@ class SSLMixTransformer(LightningModule):
         with torch.no_grad():
             feats = self.model.encoder(x)
         seg_out, _ = self.decoder(feats)
-        return seg_out
+        return fn.interpolate(
+            seg_out,
+            size=x.shape[2:],
+            mode="bilinear",
+            align_corners=False,
+        )
 
     def on_after_batch_transfer(
         self,
@@ -199,11 +206,12 @@ class SSLMixTransformer(LightningModule):
                 batch["mean"],
                 batch["std"],
             )
-        batch["image"] = standardization(
-            batch["image"],
-            batch["mean"],
-            batch["std"],
-        )
+        elif isinstance(batch.get("image"), torch.Tensor):
+            batch["image"] = standardization(
+                batch["image"],
+                batch["mean"],
+                batch["std"],
+            )
         return batch
 
     def training_step(
@@ -215,7 +223,7 @@ class SSLMixTransformer(LightningModule):
         z_low = self(batch["image_low"])
         z_high = self(batch["image_high"])
         zs = torch.stack([z_low, z_high], dim=0)
-        ssl_loss = self.loss(zs)
+        ssl_loss = self.geojepa_loss(zs)
 
         with torch.no_grad():
             z_flat = zs.reshape(-1, zs.shape[-1])
@@ -249,38 +257,18 @@ class SSLMixTransformer(LightningModule):
         y = batch["mask"]
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
-        seg_out, _ = self._seg_forward(x)
+        seg_out = self._seg_forward(x)
         seg_loss = self.probe_loss(seg_out, y)
-        self.log(
-            "val_loss",
-            seg_loss,
-            batch_size=batch_size,
-            prog_bar=True,
-            logger=True,
-            on_step=False,
-            on_epoch=True,
-            sync_dist=True,
-            rank_zero_only=False,
-        )
         if self.num_classes == 1:
             y_hat = (seg_out.sigmoid().squeeze(1) > self.threshold).long()
         else:
             y_hat = seg_out.softmax(dim=1).argmax(dim=1)
 
         self.iou.update(y_hat, y)
-
-        self.log(
-            "val_loss",
-            seg_loss,
-            batch_size=batch_size,
-            prog_bar=True,
-            logger=True,
-            on_step=False,
-            on_epoch=True,
-            sync_dist=True,
-            rank_zero_only=False,
-        )
-        if self._total_samples_visualized < self.max_samples:
+        if (
+            self.trainer.is_global_zero
+            and self._total_samples_visualized < self.max_samples
+        ):
             remaining_samples = self.max_samples - self._total_samples_visualized
             samples_to_visualize = min(remaining_samples, len(x))
             samples_visualized = self._log_visualizations(
@@ -289,9 +277,21 @@ class SSLMixTransformer(LightningModule):
                 outputs=y_hat,
                 max_samples=samples_to_visualize,
                 artifact_prefix="val",
-                epoch_suffix=False,
+                epoch_suffix=True,
             )
             self._total_samples_visualized += samples_visualized
+
+        self.log(
+            "val_loss",
+            seg_loss,
+            batch_size=batch_size,
+            prog_bar=True,
+            logger=True,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True,
+            rank_zero_only=False,
+        )
 
     def on_validation_epoch_end(self) -> None:
         """Compute and log IoU metrics at end of validation epoch."""
@@ -304,6 +304,7 @@ class SSLMixTransformer(LightningModule):
         self.log_dict(metrics, logger=True, sync_dist=True)
         self.iou.reset()
 
+    @rank_zero_only
     def _log_visualizations(  # noqa: PLR0913
         self,
         trainer: Trainer,
@@ -313,7 +314,7 @@ class SSLMixTransformer(LightningModule):
         artifact_prefix: str = "val",
         *,
         epoch_suffix: bool = True,
-    ) -> None:
+    ) -> int:
         """
         Segmentation Probe visualizations.
 
