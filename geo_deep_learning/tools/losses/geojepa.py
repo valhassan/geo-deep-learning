@@ -193,8 +193,8 @@ class GeoJEPALoss(nn.Module):
     def __init__(
         self,
         lambda_sig: float = 0.05,
-        n_samples: int = 512,
-        num_slices: int = 256,
+        n_samples: int = 2048,
+        num_slices: int = 64,
         **kwargs: object,
     ) -> None:
         """Initialize the GeoJEPALoss."""
