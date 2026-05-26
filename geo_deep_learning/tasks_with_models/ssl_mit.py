@@ -223,7 +223,7 @@ class SSLMixTransformer(LightningModule):
         z_low = self(batch["image_low"])
         z_high = self(batch["image_high"])
         zs = torch.stack([z_low, z_high], dim=0)
-        ssl_loss = self.geojepa_loss(zs)
+        loss_dict = self.geojepa_loss(zs)
 
         with torch.no_grad():
             z_flat = zs.reshape(-1, zs.shape[-1])
@@ -231,12 +231,11 @@ class SSLMixTransformer(LightningModule):
             z_norm = z_flat.norm(dim=-1).mean()
 
         batch_size = batch["image_low"].shape[0]
-        self.log_dict(
-            {
-                "ssl_loss": ssl_loss,
-                "z_std": z_std,
-                "z_norm": z_norm,
-            },
+        loss_dict.update({
+            "z_std": z_std,
+            "z_norm": z_norm,
+        })
+        self.log_dict({f"{k}": v for k, v in loss_dict.items()},
             batch_size=batch_size,
             prog_bar=True,
             logger=True,
@@ -245,7 +244,7 @@ class SSLMixTransformer(LightningModule):
             sync_dist=True,
             rank_zero_only=False,
         )
-        return ssl_loss
+        return loss_dict["ssl_loss"]
 
     def validation_step(
         self,
