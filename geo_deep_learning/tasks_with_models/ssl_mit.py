@@ -80,6 +80,7 @@ class SSLMixTransformer(LightningModule):
         self.probe_loss = probe_loss or torch.nn.CrossEntropyLoss()
         self.geojepa_loss = GeoJEPALoss(lambda_sig=self.lambda_sig)
         self.global_aug = self._global_aug()
+        self.local_aug = self._local_aug()
 
         self.class_colors = class_colors
         num_classes_for_iou = num_classes + 1 if num_classes == 1 else num_classes
@@ -113,6 +114,26 @@ class SSLMixTransformer(LightningModule):
             random_apply=False,
         )
 
+    def _local_aug(self) -> AugmentationSequential:
+        return AugmentationSequential(
+            krn.augmentation.RandomResizedCrop(
+                size=(512, 512),
+                scale=(0.15, 0.4),
+                ratio=(1.0, 1.0),
+                keepdim=True,
+            ),
+            krn.augmentation.RandomHorizontalFlip(p=0.5, keepdim=True),
+            krn.augmentation.RandomVerticalFlip(p=0.5, keepdim=True),
+            krn.augmentation.RandomRotation90(
+                times=(1, 3),
+                p=0.5,
+                align_corners=False,
+                keepdim=True,
+            ),
+            data_keys=["input", "input"],
+            random_apply=False,
+        )
+
     def state_dict(
         self,
         destination: dict[str, Any] | None = None,
@@ -126,7 +147,10 @@ class SSLMixTransformer(LightningModule):
             prefix=prefix,
             keep_vars=keep_vars,
         )
-        return {k: v for k, v in state.items() if not k.startswith("global_aug.")}
+        return {
+            k: v for k, v in state.items()
+            if not k.startswith(("global_aug.", "local_aug."))
+        }
 
     def configure_model(self) -> None:
         """Configure model."""
@@ -175,6 +199,7 @@ class SSLMixTransformer(LightningModule):
     def on_fit_start(self) -> None:
         """On fit start."""
         self.global_aug = self.global_aug.to(self.device)
+        self.local_aug = self.local_aug.to(self.device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
@@ -202,16 +227,16 @@ class SSLMixTransformer(LightningModule):
             low, high = batch["image_low"], batch["image_high"]
             mean, std = batch["mean"], batch["std"]
 
-            v1_low, v1_high = self.global_aug(low, high)
-            v2_low, v2_high = self.global_aug(low, high)
+            g_low, g_high = self.global_aug(low, high)
+            l_low, l_high = self.local_aug(low, high)
 
             batch["views_low"] = torch.stack([
-                standardization(v1_low, mean, std),
-                standardization(v2_low, mean, std),
+                standardization(g_low, mean, std),
+                standardization(l_low, mean, std),
             ], dim=0)  # [2, B, C, H, W]
             batch["views_high"] = torch.stack([
-                standardization(v1_high, mean, std),
-                standardization(v2_high, mean, std),
+                standardization(g_high, mean, std),
+                standardization(l_high, mean, std),
             ], dim=0)  # [2, B, C, H, W]
         elif isinstance(batch.get("image"), torch.Tensor):
             batch["image"] = standardization(
@@ -229,12 +254,11 @@ class SSLMixTransformer(LightningModule):
         """Run training step."""
         views_low = batch["views_low"]    # [2, B, C, H, W]
         views_high = batch["views_high"]  # [2, B, C, H, W]
-        num_views = views_low.shape[0]
-
-        zs = torch.cat([
-            torch.stack([self(views_low[i])  for i in range(num_views)], dim=0),
-            torch.stack([self(views_high[i]) for i in range(num_views)], dim=0),
-        ], dim=0)  # [2*num_views, B, N, D]
+        # [2*num_views, B, C, H, W]
+        all_views = torch.cat([views_low, views_high], dim=0)
+        v_total, b, c, h, w = all_views.shape
+        z = self(all_views.reshape(v_total * b, c, h, w))     # [2*num_views*B, N, D]
+        zs = z.reshape(v_total, b, *z.shape[1:])              # [2*num_views, B, N, D]
         loss_dict = self.geojepa_loss(zs)
 
         with torch.no_grad():
