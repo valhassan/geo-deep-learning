@@ -205,7 +205,7 @@ class GeoJEPALoss(nn.Module):
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Run the GeoJEPALoss."""
-        inv_loss = x.var(dim=0).mean()
+        inv_loss = x.mean(dim=2).var(dim=0).mean()
 
         v, b, n, d = x.shape
         tokens = x.reshape(v * b, n, d)
