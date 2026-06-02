@@ -15,6 +15,7 @@ from lightning.pytorch.utilities import rank_zero_only
 
 from geo_deep_learning.models.decoders.segformer_mlp import Decoder
 from geo_deep_learning.models.ssl.geojepa_mit import GeoJEPAMixTransformer
+from geo_deep_learning.tools.augmentation.blur import RandomGSDSimulation
 from geo_deep_learning.tools.losses.geojepa import GeoJEPALoss
 from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
@@ -79,8 +80,8 @@ class SSLMixTransformer(LightningModule):
         self.weights_from_checkpoint_path = weights_from_checkpoint_path
         self.probe_loss = probe_loss or torch.nn.CrossEntropyLoss()
         self.geojepa_loss = GeoJEPALoss(lambda_sig=self.lambda_sig)
-        self.global_aug = self._global_aug()
-        self.local_aug = self._local_aug()
+        self.geometric_aug = self._geometric_aug()
+        self.gsd_aug = RandomGSDSimulation()
 
         self.class_colors = class_colors
         num_classes_for_iou = num_classes + 1 if num_classes == 1 else num_classes
@@ -94,14 +95,14 @@ class SSLMixTransformer(LightningModule):
         self.max_samples = max_samples
         self._total_samples_visualized = 0
 
-    def _global_aug(self) -> AugmentationSequential:
+    def _geometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
-            krn.augmentation.RandomResizedCrop(
-                size=(512, 512),
-                scale=(0.6, 1.0),
-                ratio=(1.0, 1.0),
-                keepdim=True,
-            ),
+            # krn.augmentation.RandomResizedCrop(
+            #     size=(512, 512),
+            #     scale=(0.6, 1.0),
+            #     ratio=(1.0, 1.0),
+            #     keepdim=True,
+            # ),
             krn.augmentation.RandomHorizontalFlip(p=0.5, keepdim=True),
             krn.augmentation.RandomVerticalFlip(p=0.5, keepdim=True),
             krn.augmentation.RandomRotation90(
@@ -110,27 +111,7 @@ class SSLMixTransformer(LightningModule):
                 align_corners=False,
                 keepdim=True,
             ),
-            data_keys=["input", "input"],
-            random_apply=False,
-        )
-
-    def _local_aug(self) -> AugmentationSequential:
-        return AugmentationSequential(
-            krn.augmentation.RandomResizedCrop(
-                size=(512, 512),
-                scale=(0.15, 0.4),
-                ratio=(1.0, 1.0),
-                keepdim=True,
-            ),
-            krn.augmentation.RandomHorizontalFlip(p=0.5, keepdim=True),
-            krn.augmentation.RandomVerticalFlip(p=0.5, keepdim=True),
-            krn.augmentation.RandomRotation90(
-                times=(1, 3),
-                p=0.5,
-                align_corners=False,
-                keepdim=True,
-            ),
-            data_keys=["input", "input"],
+            data_keys=["input"],
             random_apply=False,
         )
 
@@ -148,8 +129,9 @@ class SSLMixTransformer(LightningModule):
             keep_vars=keep_vars,
         )
         return {
-            k: v for k, v in state.items()
-            if not k.startswith(("global_aug.", "local_aug."))
+            k: v
+            for k, v in state.items()
+            if not k.startswith(("geometric_aug.", "gsd_aug."))
         }
 
     def configure_model(self) -> None:
@@ -198,8 +180,8 @@ class SSLMixTransformer(LightningModule):
 
     def on_fit_start(self) -> None:
         """On fit start."""
-        self.global_aug = self.global_aug.to(self.device)
-        self.local_aug = self.local_aug.to(self.device)
+        self.geometric_aug = self.geometric_aug.to(self.device)
+        self.gsd_aug = self.gsd_aug.to(self.device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
@@ -227,17 +209,18 @@ class SSLMixTransformer(LightningModule):
             low, high = batch["image_low"], batch["image_high"]
             mean, std = batch["mean"], batch["std"]
 
-            g_low, g_high = self.global_aug(low, high)
-            l_low, l_high = self.local_aug(low, high)
+            params = self.gsd_aug.generate_physics_parameters(low.shape, batch["gsd"])
+            low_gsd = self.gsd_aug.apply_transform(low, params, flags={})
+            high_gsd = self.gsd_aug.apply_transform(high, params, flags={})
+            views = [low, high, low_gsd, high_gsd]
+            batch["views"] = torch.stack(
+                [
+                    standardization(self.geometric_aug(view), mean, std)
+                    for view in views
+                ],
+                dim=0,
+            )  # [4, B, C, H, W]
 
-            batch["views_low"] = torch.stack([
-                standardization(g_low, mean, std),
-                standardization(l_low, mean, std),
-            ], dim=0)  # [2, B, C, H, W]
-            batch["views_high"] = torch.stack([
-                standardization(g_high, mean, std),
-                standardization(l_high, mean, std),
-            ], dim=0)  # [2, B, C, H, W]
         elif isinstance(batch.get("image"), torch.Tensor):
             batch["image"] = standardization(
                 batch["image"],
@@ -252,13 +235,10 @@ class SSLMixTransformer(LightningModule):
         batch_idx: int,  # noqa: ARG002
     ) -> torch.Tensor:
         """Run training step."""
-        views_low = batch["views_low"]    # [2, B, C, H, W]
-        views_high = batch["views_high"]  # [2, B, C, H, W]
-        # [2*num_views, B, C, H, W]
-        all_views = torch.cat([views_low, views_high], dim=0)
-        v_total, b, c, h, w = all_views.shape
-        z = self(all_views.reshape(v_total * b, c, h, w))     # [2*num_views*B, N, D]
-        zs = z.reshape(v_total, b, *z.shape[1:])              # [2*num_views, B, N, D]
+        views = batch["views"]  # [4, B, C, H, W]
+        v, b, c, h, w = views.shape
+        z = self(views.reshape(v * b, c, h, w))
+        zs = z.reshape(v, b, *z.shape[1:])
         loss_dict = self.geojepa_loss(zs)
 
         with torch.no_grad():
@@ -266,13 +246,15 @@ class SSLMixTransformer(LightningModule):
             z_std = z_flat.std(dim=0).mean()
             z_norm = z_flat.norm(dim=-1).mean()
 
-        batch_size = views_low.shape[1]
-        loss_dict.update({
-            "z_std": z_std,
-            "z_norm": z_norm,
-        })
-        self.log_dict({f"{k}": v for k, v in loss_dict.items()},
-            batch_size=batch_size,
+        loss_dict.update(
+            {
+                "z_std": z_std,
+                "z_norm": z_norm,
+            },
+        )
+        self.log_dict(
+            {f"{k}": v for k, v in loss_dict.items()},
+            batch_size=b,
             prog_bar=True,
             logger=True,
             on_step=False,
