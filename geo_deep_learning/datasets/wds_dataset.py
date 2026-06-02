@@ -379,6 +379,11 @@ class ShardedDataset:
         key: str,
     ) -> dict[str, Any]:
         """Prepare output in GeoJEPA SSL format."""
+        gsd = metadata["metadata"].get("gsd", 0.0)
+        if gsd > 0.0:
+            gsd = torch.tensor(gsd, dtype=torch.float32)
+        else:
+            gsd = torch.tensor(1.0, dtype=torch.float32)
         return {
             "image_low": image_low,
             "image_high": image_high,
@@ -387,6 +392,7 @@ class ShardedDataset:
             "platform": self.sensor_name,
             "image_name": key,
             "metadata": metadata,
+            "gsd": gsd,
             "mean": self.norm_stats["mean"],
             "std": self.norm_stats["std"],
         }
