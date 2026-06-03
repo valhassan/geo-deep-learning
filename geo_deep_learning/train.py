@@ -1,13 +1,19 @@
 """Train model with Lightning CLI."""
 
 import logging
+import warnings
 
+import torch
 from lightning.pytorch.cli import ArgsType, LightningCLI
 
 from configs import logging_config  # noqa: F401
 from geo_deep_learning.tools.mlflow_logger import LoggerSaveConfigCallback
 
 logger = logging.getLogger(__name__)
+
+warnings.filterwarnings("ignore", message="Grad strides do not match")
+warnings.filterwarnings("ignore", message="AccumulateGrad node's stream")
+torch.autograd.graph.set_warn_on_accumulate_grad_stream_mismatch(False)
 
 
 def main(args: ArgsType = None) -> None:
