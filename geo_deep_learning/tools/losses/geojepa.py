@@ -215,16 +215,10 @@ class GeoJEPALoss(nn.Module):
             tokens = tokens[:, idx, :]
 
         sig_loss = self.sigreg(tokens) / self.n_samples
-        var_loss = torch.nn.functional.relu(1.0 - tokens.std(dim=1)).mean()
 
-        total_loss = (
-            (1.0 - self.lambda_sig) * inv_loss
-            + self.lambda_sig * sig_loss
-            + 0.1 * var_loss
-        )
+        total_loss = (1.0 - self.lambda_sig) * inv_loss + self.lambda_sig * sig_loss
         return {
             "inv_loss": inv_loss,
             "sig_loss": sig_loss,
-            "var_loss": var_loss,
             "ssl_loss": total_loss,
         }
