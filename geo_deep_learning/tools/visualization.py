@@ -1,7 +1,10 @@
 """Visualization tools."""
 
+import matplotlib as mpl
 import numpy as np
 import torch
+
+mpl.use("Agg")
 from matplotlib import pyplot as plt
 from matplotlib.colors import ListedColormap
 
