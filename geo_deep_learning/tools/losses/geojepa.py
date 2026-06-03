@@ -15,7 +15,8 @@ from torch.distributed._functional_collectives import (
 def ddp_all_reduce_avg(x: torch.Tensor) -> torch.Tensor:
     """Average across ranks (no-op if not in DDP)."""
     if dist.is_available() and dist.is_initialized():
-        return functional_all_reduce(x, "avg", dist.group.WORLD)
+        x = functional_all_reduce(x, "sum", dist.group.WORLD)
+        return x / dist.get_world_size()
     return x
 
 
