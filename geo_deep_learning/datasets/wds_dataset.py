@@ -384,6 +384,7 @@ class ShardedDataset:
             gsd = torch.tensor(gsd, dtype=torch.float32)
         else:
             gsd = torch.tensor(1.0, dtype=torch.float32)
+        wavelengths = self._extract_wavelengths(metadata)
         return {
             "image_low": image_low,
             "image_high": image_high,
@@ -393,6 +394,7 @@ class ShardedDataset:
             "image_name": key,
             "metadata": metadata,
             "gsd": gsd,
+            "wavelengths": wavelengths,
             "mean": self.norm_stats["mean"],
             "std": self.norm_stats["std"],
         }
