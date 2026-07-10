@@ -16,6 +16,7 @@ from lightning.pytorch.utilities import rank_zero_only
 from geo_deep_learning.models.decoders.segformer_mlp import Decoder
 from geo_deep_learning.models.ssl.geojepa_mit import GeoJEPAMixTransformer
 from geo_deep_learning.tools.augmentation.blur import RandomGSDSimulation
+from geo_deep_learning.tools.augmentation.haze import RandomKoschmiederHaze
 from geo_deep_learning.tools.losses.geojepa import GeoJEPALoss
 from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
@@ -82,6 +83,7 @@ class SSLMixTransformer(LightningModule):
         self.geojepa_loss = GeoJEPALoss(lambda_sig=self.lambda_sig)
         self.geometric_aug = self._geometric_aug()
         self.gsd_aug = RandomGSDSimulation()
+        self.haze_aug = RandomKoschmiederHaze()
 
         self.class_colors = class_colors
         num_classes_for_iou = num_classes + 1 if num_classes == 1 else num_classes
@@ -131,7 +133,7 @@ class SSLMixTransformer(LightningModule):
         return {
             k: v
             for k, v in state.items()
-            if not k.startswith(("geometric_aug.", "gsd_aug."))
+            if not k.startswith(("geometric_aug.", "gsd_aug.", "haze_aug."))
         }
 
     def configure_model(self) -> None:
@@ -182,6 +184,7 @@ class SSLMixTransformer(LightningModule):
         """On fit start."""
         self.geometric_aug = self.geometric_aug.to(self.device)
         self.gsd_aug = self.gsd_aug.to(self.device)
+        self.haze_aug = self.haze_aug.to(self.device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
@@ -209,10 +212,17 @@ class SSLMixTransformer(LightningModule):
             low, high = batch["image_low"], batch["image_high"]
             mean, std = batch["mean"], batch["std"]
 
-            params = self.gsd_aug.generate_physics_parameters(low.shape, batch["gsd"])
-            low_gsd = self.gsd_aug.apply_transform(low, params, flags={})
-            high_gsd = self.gsd_aug.apply_transform(high, params, flags={})
-            views = [low, high, low_gsd, high_gsd]
+            gsd_params = self.gsd_aug.generate_physics_parameters(
+                low.shape, batch["gsd"],
+            )
+            haze_params = self.haze_aug.generate_physics_parameters(
+                high.shape, batch["wavelengths"],
+            )
+
+            high_haze = self.haze_aug.apply_transform(high, haze_params, flags={})
+            low_gsd = self.gsd_aug.apply_transform(low, gsd_params, flags={})
+            high_gsd = self.gsd_aug.apply_transform(high, gsd_params, flags={})
+            views = [high, low_gsd, high_gsd, high_haze]
             batch["views"] = torch.stack(
                 [
                     standardization(self.geometric_aug(view), mean, std)
