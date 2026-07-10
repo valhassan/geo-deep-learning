@@ -11,7 +11,7 @@ from kornia.augmentation import IntensityAugmentationBase2D
 
 
 class RandomGSDSimulation(IntensityAugmentationBase2D):
-    r"""
+    """
     Simulates lower-resolution sensors via MTF blur and spatial downsampling.
 
     Args:
