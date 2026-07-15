@@ -3,8 +3,6 @@
 from typing import Any
 
 import torch
-
-# import torch.nn.functional as F  # only needed for the sequential fallback below
 from kornia.augmentation import IntensityAugmentationBase2D
 
 
@@ -22,7 +20,7 @@ class RandomKoschmiederHaze(IntensityAugmentationBase2D):
 
     def __init__(
         self,
-        beta_range: tuple[float, float] = (0.05, 0.35),
+        beta_range: tuple[float, float] = (0.3, 1.5),
         airlight_range: tuple[float, float] = (0.75, 1.0),
         p: float = 1.0,
     ) -> None:
