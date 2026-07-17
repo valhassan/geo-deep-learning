@@ -17,6 +17,8 @@ from geo_deep_learning.models.decoders.segformer_mlp import Decoder
 from geo_deep_learning.models.ssl.geojepa_mit import GeoJEPAMixTransformer
 from geo_deep_learning.tools.augmentation.blur import RandomGSDSimulation
 from geo_deep_learning.tools.augmentation.haze import RandomKoschmiederHaze
+from geo_deep_learning.tools.augmentation.noise import RandomPoissonNoise
+from geo_deep_learning.tools.augmentation.shading import RandomDirectionalIllumination
 from geo_deep_learning.tools.losses.geojepa import GeoJEPALoss
 from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
@@ -84,6 +86,8 @@ class SSLMixTransformer(LightningModule):
         self.geometric_aug = self._geometric_aug()
         self.gsd_aug = RandomGSDSimulation()
         self.haze_aug = RandomKoschmiederHaze()
+        self.shading_aug = RandomDirectionalIllumination()
+        self.noise_aug = RandomPoissonNoise()
 
         self.class_colors = class_colors
         num_classes_for_iou = num_classes + 1 if num_classes == 1 else num_classes
@@ -133,7 +137,15 @@ class SSLMixTransformer(LightningModule):
         return {
             k: v
             for k, v in state.items()
-            if not k.startswith(("geometric_aug.", "gsd_aug.", "haze_aug."))
+            if not k.startswith(
+                (
+                    "geometric_aug.",
+                    "gsd_aug.",
+                    "haze_aug.",
+                    "shading_aug.",
+                    "noise_aug.",
+                ),
+            )
         }
 
     def configure_model(self) -> None:
@@ -185,6 +197,8 @@ class SSLMixTransformer(LightningModule):
         self.geometric_aug = self.geometric_aug.to(self.device)
         self.gsd_aug = self.gsd_aug.to(self.device)
         self.haze_aug = self.haze_aug.to(self.device)
+        self.shading_aug = self.shading_aug.to(self.device)
+        self.noise_aug = self.noise_aug.to(self.device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
@@ -218,18 +232,28 @@ class SSLMixTransformer(LightningModule):
             haze_params = self.haze_aug.generate_physics_parameters(
                 high.shape, batch["wavelengths"],
             )
+            shading_params = self.shading_aug.generate_physics_parameters(
+                high.shape, batch["wavelengths"],
+            )
+            noise_params = self.noise_aug.generate_physics_parameters(
+                high.shape, high,
+            )
 
             high_haze = self.haze_aug.apply_transform(high, haze_params, flags={})
+            high_shading = self.shading_aug.apply_transform(
+                high, shading_params, flags={},
+            )
+            high_noise = self.noise_aug.apply_transform(high, noise_params, flags={})
             low_gsd = self.gsd_aug.apply_transform(low, gsd_params, flags={})
             high_gsd = self.gsd_aug.apply_transform(high, gsd_params, flags={})
-            views = [high, low_gsd, high_gsd, high_haze]
+            views = [high, low_gsd, high_gsd, high_haze, high_shading, high_noise]
             batch["views"] = torch.stack(
                 [
                     standardization(self.geometric_aug(view), mean, std)
                     for view in views
                 ],
                 dim=0,
-            )  # [4, B, C, H, W]
+            )  # [6, B, C, H, W]
 
         elif isinstance(batch.get("image"), torch.Tensor):
             batch["image"] = standardization(
@@ -245,7 +269,7 @@ class SSLMixTransformer(LightningModule):
         batch_idx: int,  # noqa: ARG002
     ) -> torch.Tensor:
         """Run training step."""
-        views = batch["views"]  # [4, B, C, H, W]
+        views = batch["views"]  # [6, B, C, H, W]
         v, b, c, h, w = views.shape
         z = self(views.reshape(v * b, c, h, w))
         zs = z.reshape(v, b, *z.shape[1:])
