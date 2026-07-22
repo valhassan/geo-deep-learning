@@ -10,43 +10,40 @@ class RandomDirectionalIllumination(IntensityAugmentationBase2D):
     """
     Simulates directional sunlight shading via a smooth per-image gradient field.
 
-    Physics: low sun elevation produces long, high-contrast directional shading
-    (strong gradient across the scene) plus a warm color shift, since light
-    travels through more atmosphere and Rayleigh scattering removes more of
-    the shorter (blue) wavelengths than the longer (red) ones — the same
-    mechanism as sunset reddening. High sun elevation produces flat, near-
-    neutral lighting. Azimuth sets the gradient direction. No polygon/label
-    dependency — safe for unlabeled pretraining imagery.
+    Physics: low sun elevation produces long, low-angle light and a strong
+    directional shading gradient across the scene; high sun elevation
+    produces flat, near-uniform lighting (weak gradient). Azimuth sets the
+    gradient direction. Purely spatial/geometric — illuminant chromaticity
+    (color temperature) is intentionally NOT modeled here; that's owned
+    exclusively by RandomPlanckianIllumination to avoid two augmentations
+    independently perturbing the same channel-gain degree of freedom. No
+    polygon/label dependency — safe for unlabeled pretraining imagery.
 
     Args:
         elevation_range: (min, max) sun elevation in degrees. Lower values
-                          produce stronger directional shading and warmer color.
-        warmth_strength: scales how strongly low elevation warms the color
-                          temperature via wavelength-dependent scattering.
+                          produce stronger directional shading.
         p: probability of applying the augmentation per image.
 
     """
 
     def __init__(
         self,
-        elevation_range: tuple[float, float] = (15.0, 75.0),
-        warmth_strength: float = 0.4,
+        elevation_range: tuple[float, float] = (5.0, 40.0),
         p: float = 1.0,
     ) -> None:
         """Initialize RandomDirectionalIllumination."""
         super().__init__(p=p, same_on_batch=False, p_batch=1.0)
         self.elevation_range = elevation_range
-        self.warmth_strength = warmth_strength
 
     def generate_physics_parameters(
         self,
         shape: torch.Size,
-        wavelengths: torch.Tensor,
+        input: torch.Tensor,  # noqa: A002
     ) -> dict[str, torch.Tensor]:
         """Generate physics parameters."""
         b = shape[0]
-        device = wavelengths.device
-        dtype = wavelengths.dtype
+        device = input.device
+        dtype = input.dtype
 
         # 1. Sample sun azimuth per image (direction of the shading gradient)
         azimuth = torch.rand(b, device=device, dtype=dtype) * 2.0 * torch.pi
@@ -61,15 +58,7 @@ class RandomDirectionalIllumination(IntensityAugmentationBase2D):
         # At elevation -> 0 deg (grazing sun), amplitude -> its max (strong shading).
         amplitude = 1.0 - torch.sin(elevation)
 
-        # 4. Wavelength-coupled warm shift (Rayleigh scattering, same law as
-        # haze's beta_lambda): shorter wavelengths attenuate more as the light
-        # path through the atmosphere lengthens (i.e. as amplitude grows).
-        # Using 0.55 um (Green) as the same anchor wavelength as haze.py.
-        color_t = torch.exp(
-            -self.warmth_strength * amplitude.view(b, 1) * (0.55 / wavelengths) ** 4,
-        )
-
-        return {"azimuth": azimuth, "amplitude": amplitude, "color_t": color_t}
+        return {"azimuth": azimuth, "amplitude": amplitude}
 
     def apply_transform(
         self,
@@ -82,7 +71,6 @@ class RandomDirectionalIllumination(IntensityAugmentationBase2D):
         b, _, h, w = input.shape
         azimuth = params["azimuth"]
         amplitude = params["amplitude"]
-        color_t = params["color_t"]
 
         # Normalized pixel coordinate grid in [-1, 1]
         ys, xs = torch.meshgrid(
@@ -102,8 +90,7 @@ class RandomDirectionalIllumination(IntensityAugmentationBase2D):
         # Shading field: 1.0 at ramp midpoint, +/- amplitude at the extremes
         shading = 1.0 + amplitude.view(b, 1, 1) * ramp
         shading = shading.unsqueeze(1)  # (B, 1, H, W), broadcasts over channels
-        color = color_t.view(b, -1, 1, 1)  # (B, C, 1, 1), broadcasts over H, W
 
-        shaded = input * shading * color
+        shaded = input * shading
 
         return torch.clamp(shaded, 0.0, 1.0)
