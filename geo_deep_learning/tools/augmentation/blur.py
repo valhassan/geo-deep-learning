@@ -14,31 +14,37 @@ class RandomGSDSimulation(IntensityAugmentationBase2D):
     """
     Simulates lower-resolution sensors via MTF blur and spatial downsampling.
 
+    Samples a relative downsample ratio so severity is consistent across
+    sensors: target_gsd = src_gsd * ratio.
+
     Args:
-        target_gsd: (min, max) range in metres to sample simulated GSD from.
+        downsample_ratio: (min, max) relative GSD factor to sample per image.
+                          e.g. 2.0 doubles GSD (half resolution).
         p: probability of applying the augmentation per image.
 
     """
 
     def __init__(
-        self, target_gsd: tuple[float, float] = (1.5, 3.0), p: float = 1.0,
+        self,
+        downsample_ratio: tuple[float, float] = (2.0, 8.0),
+        p: float = 1.0,
     ) -> None:
         """Initialize RandomGSDSimulation."""
         super().__init__(p=p, same_on_batch=False, p_batch=1.0)
-        self.target_gsd = target_gsd
+        self.downsample_ratio = downsample_ratio
 
     def generate_physics_parameters(
         self,
         shape: torch.Size,
         src_gsd: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        """Generate physics parameters."""
+        """Generate physics parameters from relative downsample ratio."""
         b = shape[0]
-        lo, hi = self.target_gsd
-        simulated_gsd = (
+        lo, hi = self.downsample_ratio
+        ratio = (
             torch.rand(b, device=src_gsd.device, dtype=src_gsd.dtype) * (hi - lo) + lo
         )
-        ratio = simulated_gsd / src_gsd
+        # ratio is always >= 1 for defaults; keep guard for custom ranges
         sigma = torch.where(ratio > 1.0, (ratio - 1.0) / 2.355, torch.zeros_like(ratio))
         return {"sigma": sigma, "scale_factor": 1.0 / ratio}
 
