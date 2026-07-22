@@ -194,27 +194,37 @@ class GeoJEPALoss(nn.Module):
     def __init__(
         self,
         lambda_sig: float = 0.05,
-        n_samples: int = 2048,
+        n_positions: int = 1024,
         num_slices: int = 64,
         **kwargs: object,
     ) -> None:
         """Initialize the GeoJEPALoss."""
         super().__init__()
         self.lambda_sig = lambda_sig
-        self.n_samples = n_samples
+        self.n_positions = n_positions
         self.sigreg = SIGReg(num_slices=num_slices, **kwargs)
+        self.register_buffer("pos_step", torch.zeros((), dtype=torch.long))
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Run the GeoJEPALoss."""
-        inv_loss = x.mean(dim=2).var(dim=0).mean()
-
         v, b, n, d = x.shape
-        tokens = x.reshape(v * b, n, d)
-        if self.n_samples is not None and self.n_samples < n:
-            idx = torch.randperm(n, device=x.device)[: self.n_samples]
-            tokens = tokens[:, idx, :]
+        inv_loss = x.var(dim=0).mean()
 
-        sig_loss = self.sigreg(tokens) / self.n_samples
+        if self.n_positions is not None and self.n_positions < n:
+            with torch.no_grad():
+                step = ddp_all_reduce_max(self.pos_step.clone()).item()
+                g = torch.Generator(device=x.device)
+                g.manual_seed(int(step))
+                idx = torch.randperm(n, device=x.device, generator=g)[
+                    : self.n_positions
+                ]
+                self.pos_step.add_(1)
+            xs = x[:, :, idx, :]
+        else:
+            xs = x
+
+        emb = xs.permute(2, 0, 1, 3).reshape(xs.size(2), v * b, d)
+        sig_loss = self.sigreg(emb) / (v * b)
 
         total_loss = (1.0 - self.lambda_sig) * inv_loss + self.lambda_sig * sig_loss
         return {
@@ -222,3 +232,11 @@ class GeoJEPALoss(nn.Module):
             "sig_loss": sig_loss,
             "ssl_loss": total_loss,
         }
+
+if __name__ == "__main__":
+    loss = GeoJEPALoss(lambda_sig=0.05)
+    d = 256
+    cloud = torch.randn(1, 1, 4096, d)
+    x_cheat = cloud.expand(2, 16, 4096, d).contiguous()
+    x_real = torch.randn(2, 16, 4096, d)
+    # print(loss(x_cheat)["sig_loss"], loss(x_real)["sig_loss"])
