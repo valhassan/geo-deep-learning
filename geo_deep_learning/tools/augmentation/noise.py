@@ -1,5 +1,6 @@
 """Physically-grounded sensor noise simulation via Poisson photon counting."""
 
+import math
 from typing import Any
 
 import torch
@@ -7,25 +8,23 @@ from kornia.augmentation import IntensityAugmentationBase2D
 
 
 class RandomPoissonNoise(IntensityAugmentationBase2D):
-    r"""
-    Simulates sensor signal-to-noise ratio (SNR) using shot noise (Poisson,
-    signal-dependent) plus a fixed read-noise floor (Gaussian, roughly
-    signal-independent) from the sensor's readout electronics.
+    """
 
-    Lower photon_scale simulates a smaller aperture or lower light conditions.
+    Simulate sensor signal-to-noise ratio (SNR).
 
     Args:
-        photon_range: (min, max) range for the photon scaling factor.
-                      e.g., 100.0 is very noisy, 10000.0 is very clean.
-        read_noise_range: (min, max) range for the fixed read-noise sigma,
-                           in the same [0, 1] reflectance units as the input.
+        photon_range: (min, max) photon scaling factor (log-uniform).
+                      Lower = noisier. e.g. (15, 120) for visible degradation.
+        read_noise_range: (min, max) fixed read-noise sigma in [0, 1]
+                           reflectance units.
         p: probability of applying the augmentation per image.
+
     """
 
     def __init__(
         self,
-        photon_range: tuple[float, float] = (30.0, 5000.0),
-        read_noise_range: tuple[float, float] = (0.0, 0.04),
+        photon_range: tuple[float, float] = (15.0, 120.0),
+        read_noise_range: tuple[float, float] = (0.04, 0.15),
         p: float = 1.0,
     ) -> None:
         """Initialize RandomPoissonNoise."""
@@ -43,9 +42,11 @@ class RandomPoissonNoise(IntensityAugmentationBase2D):
         device = input.device
         dtype = input.dtype
 
-        # 1. Sample a photon scale per image (governs shot-noise magnitude)
+        # 1. Log-uniform photon scale so low SNR is actually hit in SSL draws
         lo_p, hi_p = self.photon_range
-        scale = torch.rand(b, 1, 1, 1, device=device, dtype=dtype) * (hi_p - lo_p) + lo_p
+        u = torch.rand(b, 1, 1, 1, device=device, dtype=dtype)
+        log_lo, log_hi = math.log(lo_p), math.log(hi_p)
+        scale = torch.exp(u * (log_hi - log_lo) + log_lo)
 
         # 2. Sample a read-noise sigma per image (fixed noise floor, independent
         # of signal level, from the sensor's readout electronics)
