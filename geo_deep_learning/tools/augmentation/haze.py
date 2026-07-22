@@ -20,8 +20,8 @@ class RandomKoschmiederHaze(IntensityAugmentationBase2D):
 
     def __init__(
         self,
-        beta_range: tuple[float, float] = (0.3, 1.5),
-        airlight_range: tuple[float, float] = (0.75, 1.0),
+        beta_range: tuple[float, float] = (0.8, 2.5),
+        airlight_range: tuple[float, float] = (0.55, 0.95),
         p: float = 1.0,
     ) -> None:
         """Initialize RandomKoschmiederHaze."""
@@ -67,11 +67,13 @@ class RandomKoschmiederHaze(IntensityAugmentationBase2D):
         flags: dict[str, Any],  # noqa: ARG002
         transform: torch.Tensor | None = None,  # noqa: ARG002
     ) -> torch.Tensor:
-        """Apply transform."""
+        """Apply Koschmieder haze; preserve all-zero (void) pixels."""
         t = params["t"]
         a = params["A"]
 
         # Koschmieder equation: I_hazy = I_clear * t + A * (1 - t)
-        hazy = input * t + a * (1.0 - t)
+        hazy = torch.clamp(input * t + a * (1.0 - t), 0.0, 1.0)
 
-        return torch.clamp(hazy, 0.0, 1.0)
+        # Void / nodata fill is all-band 0; do not replace with airlight.
+        valid = input.gt(0).any(dim=1, keepdim=True)
+        return torch.where(valid, hazy, input)
