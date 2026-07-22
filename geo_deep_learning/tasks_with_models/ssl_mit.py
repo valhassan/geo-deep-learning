@@ -16,9 +16,8 @@ from lightning.pytorch.utilities import rank_zero_only
 from geo_deep_learning.models.decoders.segformer_mlp import Decoder
 from geo_deep_learning.models.ssl.geojepa_mit import GeoJEPAMixTransformer
 from geo_deep_learning.tools.augmentation.blur import RandomGSDSimulation
-from geo_deep_learning.tools.augmentation.haze import RandomKoschmiederHaze
 from geo_deep_learning.tools.augmentation.noise import RandomPoissonNoise
-from geo_deep_learning.tools.augmentation.shading import RandomDirectionalIllumination
+from geo_deep_learning.tools.augmentation.planckian import RandomPlanckianIllumination
 from geo_deep_learning.tools.losses.geojepa import GeoJEPALoss
 from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
@@ -84,9 +83,8 @@ class SSLMixTransformer(LightningModule):
         self.probe_loss = probe_loss or torch.nn.CrossEntropyLoss()
         self.geojepa_loss = GeoJEPALoss(lambda_sig=self.lambda_sig)
         self.geometric_aug = self._geometric_aug()
-        self.gsd_aug = RandomGSDSimulation()
-        self.haze_aug = RandomKoschmiederHaze()
-        self.shading_aug = RandomDirectionalIllumination()
+        self.planck = RandomPlanckianIllumination()
+        self.gsd_aug = RandomGSDSimulation(downsample_ratio=(4.0, 12.0))
         self.noise_aug = RandomPoissonNoise()
 
         self.class_colors = class_colors
@@ -103,12 +101,6 @@ class SSLMixTransformer(LightningModule):
 
     def _geometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
-            # krn.augmentation.RandomResizedCrop(
-            #     size=(512, 512),
-            #     scale=(0.6, 1.0),
-            #     ratio=(1.0, 1.0),
-            #     keepdim=True,
-            # ),
             krn.augmentation.RandomHorizontalFlip(p=0.5, keepdim=True),
             krn.augmentation.RandomVerticalFlip(p=0.5, keepdim=True),
             krn.augmentation.RandomRotation90(
@@ -141,9 +133,8 @@ class SSLMixTransformer(LightningModule):
                 (
                     "geometric_aug.",
                     "gsd_aug.",
-                    "haze_aug.",
-                    "shading_aug.",
                     "noise_aug.",
+                    "planck.",
                 ),
             )
         }
@@ -196,9 +187,8 @@ class SSLMixTransformer(LightningModule):
         """On fit start."""
         self.geometric_aug = self.geometric_aug.to(self.device)
         self.gsd_aug = self.gsd_aug.to(self.device)
-        self.haze_aug = self.haze_aug.to(self.device)
-        self.shading_aug = self.shading_aug.to(self.device)
         self.noise_aug = self.noise_aug.to(self.device)
+        self.planck = self.planck.to(self.device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
@@ -216,6 +206,26 @@ class SSLMixTransformer(LightningModule):
             align_corners=False,
         )
 
+    def _planck_view(
+        self,
+        image: torch.Tensor,
+        wavelengths: torch.Tensor,
+    ) -> torch.Tensor:
+        params = self.planck.generate_physics_parameters(image.shape, wavelengths)
+        return self.planck.apply_transform(image, params, flags={})
+
+    def _apply_sensor(
+        self,
+        image: torch.Tensor,
+        gsd: torch.Tensor,
+    ) -> torch.Tensor:
+        """Optics → sensor noise (strong GSD ratio + Poisson)."""
+        x = image
+        params = self.gsd_aug.generate_physics_parameters(x.shape, gsd)
+        x = self.gsd_aug.apply_transform(x, params, flags={})
+        params = self.noise_aug.generate_physics_parameters(x.shape, x)
+        return self.noise_aug.apply_transform(x, params, flags={})
+
     def on_after_batch_transfer(
         self,
         batch: dict[str, Any],
@@ -223,38 +233,17 @@ class SSLMixTransformer(LightningModule):
     ) -> dict[str, Any]:
         """On after batch transfer."""
         if self.trainer.training:
-            low, high = batch["image_low"], batch["image_high"]
+            high = batch["image_high"]
             mean, std = batch["mean"], batch["std"]
-
-            gsd_params = self.gsd_aug.generate_physics_parameters(
-                low.shape, batch["gsd"],
-            )
-            haze_params = self.haze_aug.generate_physics_parameters(
-                high.shape, batch["wavelengths"],
-            )
-            shading_params = self.shading_aug.generate_physics_parameters(
-                high.shape, batch["wavelengths"],
-            )
-            noise_params = self.noise_aug.generate_physics_parameters(
-                high.shape, high,
-            )
-
-            high_haze = self.haze_aug.apply_transform(high, haze_params, flags={})
-            high_shading = self.shading_aug.apply_transform(
-                high, shading_params, flags={},
-            )
-            high_noise = self.noise_aug.apply_transform(high, noise_params, flags={})
-            low_gsd = self.gsd_aug.apply_transform(low, gsd_params, flags={})
-            high_gsd = self.gsd_aug.apply_transform(high, gsd_params, flags={})
-            views = [high, low_gsd, high_gsd, high_haze, high_shading, high_noise]
+            high = self.geometric_aug(high)
+            views = [
+                self._planck_view(high, batch["wavelengths"]),
+                self._apply_sensor(high, batch["gsd"]),
+            ]
             batch["views"] = torch.stack(
-                [
-                    standardization(self.geometric_aug(view), mean, std)
-                    for view in views
-                ],
+                [standardization(view, mean, std) for view in views],
                 dim=0,
-            )  # [6, B, C, H, W]
-
+            )
         elif isinstance(batch.get("image"), torch.Tensor):
             batch["image"] = standardization(
                 batch["image"],
@@ -269,16 +258,15 @@ class SSLMixTransformer(LightningModule):
         batch_idx: int,  # noqa: ARG002
     ) -> torch.Tensor:
         """Run training step."""
-        views = batch["views"]  # [6, B, C, H, W]
+        views = batch["views"]  # [2, B, C, H, W]
         v, b, c, h, w = views.shape
         z = self(views.reshape(v * b, c, h, w))
         zs = z.reshape(v, b, *z.shape[1:])
         loss_dict = self.geojepa_loss(zs)
 
         with torch.no_grad():
-            z_flat = zs.reshape(-1, zs.shape[-1])
-            z_std = z_flat.std(dim=0).mean()
-            z_norm = z_flat.norm(dim=-1).mean()
+            z_std = zs.std(dim=(0, 1)).mean()
+            z_norm = zs.reshape(-1, zs.shape[-1]).norm(dim=-1).mean()
 
         loss_dict.update(
             {
