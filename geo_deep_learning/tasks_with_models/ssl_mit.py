@@ -84,7 +84,7 @@ class SSLMixTransformer(LightningModule):
         self.geojepa_loss = GeoJEPALoss(lambda_sig=self.lambda_sig)
         self.geometric_aug = self._geometric_aug()
         self.planck = RandomPlanckianIllumination()
-        self.gsd_aug = RandomGSDSimulation(downsample_ratio=(4.0, 12.0))
+        self.gsd_aug = RandomGSDSimulation(downsample_ratio=(1.25, 3.0))
         self.noise_aug = RandomPoissonNoise()
 
         self.class_colors = class_colors
