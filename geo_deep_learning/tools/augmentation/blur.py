@@ -26,7 +26,7 @@ class RandomGSDSimulation(IntensityAugmentationBase2D):
 
     def __init__(
         self,
-        downsample_ratio: tuple[float, float] = (2.0, 8.0),
+        downsample_ratio: tuple[float, float] = (1.25, 3.0),
         p: float = 1.0,
     ) -> None:
         """Initialize RandomGSDSimulation."""
