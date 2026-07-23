@@ -233,12 +233,12 @@ class SSLMixTransformer(LightningModule):
     ) -> dict[str, Any]:
         """On after batch transfer."""
         if self.trainer.training:
-            high = batch["image_high"]
+            image = batch["image"]
             mean, std = batch["mean"], batch["std"]
-            high = self.geometric_aug(high)
+            image = self.geometric_aug(image)
             views = [
-                self._planck_view(high, batch["wavelengths"]),
-                self._apply_sensor(high, batch["gsd"]),
+                self._planck_view(image, batch["wavelengths"]),
+                self._apply_sensor(image, batch["gsd"]),
             ]
             batch["views"] = torch.stack(
                 [standardization(view, mean, std) for view in views],
