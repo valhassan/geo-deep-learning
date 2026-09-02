@@ -14,6 +14,7 @@ from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
 from torch import Tensor, nn
 
+from geo_deep_learning.models.heads.segmentation_head import SegmentationOutput
 from geo_deep_learning.models.segmentation.dofa import DOFASegmentationModel
 from geo_deep_learning.tools.augmentation.gridmask import FastGridMask
 from geo_deep_learning.tools.losses.lejepa import SIGReg
@@ -250,11 +251,32 @@ class SegmentationDOFA(LightningModule):
     ) -> dict[str, Any]:
         """On after batch transfer."""
         if self.trainer.training:
-            x, y = self.geometric_aug(batch["image"], batch["mask"])
+            if "sdf" in batch:
+                x, y, sdf = self.geometric_aug(
+                    batch["image"],
+                    batch["mask"],
+                    batch["sdf"],
+                    data_keys=["image", "mask", "image"],
+                )
+                batch["sdf"] = sdf
+            else:
+                x, y = self.geometric_aug(batch["image"], batch["mask"])
             batch["image"] = x
             batch["mask"] = y
         batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
         return batch
+
+    @staticmethod
+    def _sdf_kw(
+        batch: dict[str, Any],
+        outputs: SegmentationOutput,
+    ) -> dict[str, Tensor | None]:
+        """Return SDF kwargs for GeoAwareLoss."""
+        aux = outputs.aux if outputs.aux is not None else {}
+        return {
+            "sdf_pred": aux.get("sdf"),
+            "sdf_target": batch.get("sdf"),
+        }
 
     def training_step(
         self,
@@ -268,8 +290,9 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
+        sdf_kw = self._sdf_kw(batch, outputs)
 
-        loss_main = self.loss(outputs.out, y)
+        loss_main = self.loss(outputs.out, y, **sdf_kw)
         loss_aux = self.loss(outputs.aux["aux"], y)
         seg_loss = loss_main + 0.4 * loss_aux
         total_loss = seg_loss
@@ -332,7 +355,7 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
-        loss = self.loss(outputs.out, y)
+        loss = self.loss(outputs.out, y, **self._sdf_kw(batch, outputs))
         self.log(
             "val_loss",
             loss,
@@ -363,7 +386,7 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
-        loss = self.loss(outputs.out, y)
+        loss = self.loss(outputs.out, y, **self._sdf_kw(batch, outputs))
 
         if self.num_classes == 1:
             y_hat = (outputs.out.sigmoid().squeeze(1) > self.threshold).long()
