@@ -10,7 +10,7 @@ class BoundaryLoss(nn.Module):
 
     def __init__(
         self,
-        classes: list[int] | None = None,
+        classes: list[int],
         theta0: int = 3,
         theta: int = 5,
     ) -> None:
@@ -18,12 +18,14 @@ class BoundaryLoss(nn.Module):
         Initialise BoundaryLoss.
 
         Args:
-            classes:  Class indices to compute boundary loss over.
-                      None means all classes.
+            classes:  Class indices to compute boundary loss over. Required.
             theta0:   Kernel size for boundary extraction (pred and gt).
             theta:    Kernel size for boundary dilation (tolerance window).
 
         """
+        if not classes:
+            msg = "classes is required for BF1 (e.g. [4] for buildings)"
+            raise ValueError(msg)
         super().__init__()
         self.theta0 = theta0
         self.theta = theta
@@ -64,10 +66,9 @@ class BoundaryLoss(nn.Module):
 
         one_hot_gt = fn.one_hot(gt, num_classes=c).float().permute(0, 3, 1, 2)
 
-        if self.classes is not None:
-            pred_soft = pred_soft[:, self.classes]
-            one_hot_gt = one_hot_gt[:, self.classes]
-            c = len(self.classes)
+        pred_soft = pred_soft[:, self.classes]
+        one_hot_gt = one_hot_gt[:, self.classes]
+        c = len(self.classes)
 
         pred_b = fn.max_pool2d(
             1 - pred_soft,
@@ -78,8 +79,6 @@ class BoundaryLoss(nn.Module):
         pred_b = pred_b - (1 - pred_soft)
 
         if vector_boundary is not None:
-            # Expand sub-pixel soft boundary to match the number of selected classes.
-            # Non-building channels will have near-zero values, so broadcasting is safe.
             gt_b = vector_boundary.expand(n, c, *vector_boundary.shape[2:])
         else:
             gt_b = fn.max_pool2d(
