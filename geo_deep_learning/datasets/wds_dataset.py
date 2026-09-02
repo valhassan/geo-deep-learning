@@ -277,11 +277,21 @@ class ShardedDataset:
 
         # Prepare output based on model type
         if self.model_type == "clay":
-            return self._prepare_clay_output(image, label, metadata, sample["__key__"])
-        if self.model_type == "dofa":
-            return self._prepare_dofa_output(image, label, metadata, sample["__key__"])
-        # unified
-        return self._prepare_generic_output(image, label, metadata, sample["__key__"])
+            out = self._prepare_clay_output(image, label, metadata, sample["__key__"])
+        elif self.model_type == "dofa":
+            out = self._prepare_dofa_output(image, label, metadata, sample["__key__"])
+        else:
+            out = self._prepare_generic_output(
+                image,
+                label,
+                metadata,
+                sample["__key__"],
+            )
+        sdf = sample.get("buildings_sdf.npy")
+        if sdf is not None:
+            sdf_t = torch.from_numpy(sdf).float()
+            out["sdf"] = sdf_t.reshape(1, *sdf_t.shape[-2:])
+        return out
 
     def _prepare_clay_output(
         self,
