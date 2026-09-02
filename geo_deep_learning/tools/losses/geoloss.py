@@ -26,7 +26,7 @@ class GeoAwareLoss(nn.Module):
 
     def __init__(  # noqa: PLR0913
         self,
-        classes: list[int] | None = None,
+        classes: list[int],
         alpha: float = 0.2,
         lambda_ce: float = 0.1,
         ce_smooth: float = 0.1,
@@ -45,7 +45,7 @@ class GeoAwareLoss(nn.Module):
         Initialize GeoAware Loss.
 
         Args:
-            classes:        Class indices for boundary loss. None = all classes.
+            classes:        Class indices for BF1. Required; no default.
             alpha:          Weight for boundary (BF1) loss.
             lambda_ce:      Weight for cross-entropy loss.
             ce_smooth:      Label smoothing for cross-entropy.
@@ -58,10 +58,14 @@ class GeoAwareLoss(nn.Module):
             cldice_iter:    Soft skeleton erosion iterations.
                             10 covers road widths up to ~30px.
                             Increase to 15 for 15cm aerial data.
-            building_class: Class index for buildings (SDF mask).
+            building_class: Class index for buildings.
             gamma_sdf:      Weight for SDF auxiliary loss.
 
         """
+        if not classes:
+            msg = "classes is required for BF1 (e.g. [4] for buildings)"
+            raise ValueError(msg)
+
         super().__init__()
         self.alpha = alpha
         self.lambda_ce = lambda_ce
@@ -153,9 +157,9 @@ class GeoAwareLoss(nn.Module):
             sdf_pred:          (N, 1, H, W) float32. Output of SDF auxiliary
                                head. Skipped when None.
 
-            sdf_target:        (N, 1, H, W) float32. Signed metric distance
-                               to nearest building boundary (buildings_sdf.npy,
-                               loaded as float16, cast to float32 before call).
+            sdf_target:        (N, 1, H, W) float32 in [-1, 1].
+                               Signed distance to nearest building boundary,
+                               clipped/normalized (buildings_sdf.npy).
                                Skipped when None.
 
         Returns:
@@ -264,30 +268,15 @@ class GeoAwareLoss(nn.Module):
         gt_b: torch.Tensor,
         ignore_mask: torch.Tensor | None,
     ) -> torch.Tensor:
-        """
-        MSE loss on SDF auxiliary head, buildings pixels only.
-
-        Masked to building pixels so gradient only flows where SDF
-        supervision is meaningful. Returns zero when either tensor
-        is absent — no-op when SDF head is not attached.
-
-        Args:
-            sdf_pred:    (N, 1, H, W) float32 from auxiliary head.
-            sdf_target:  (N, 1, H, W) float32 from buildings_sdf.npy.
-            gt_b:        (N, H, W) integer labels, ignore pixels zeroed.
-            ignore_mask: (N, H, W) float, 1 = valid, 0 = ignored.
-
-        Returns:
-            Scalar mean MSE over building pixels.
-
-        """
+        """MSE on the |sdf_target| < 1 clip band, ignore-masked."""
         if sdf_pred is None or sdf_target is None:
             return gt_b.new_zeros(())
 
-        building_mask = (gt_b == self.building_class).float()  # (N, H, W)
+        sdf = sdf_target.squeeze(1)
+        band = (sdf.abs() < 1.0).float()
         if ignore_mask is not None:
-            building_mask = building_mask * ignore_mask
+            band = band * ignore_mask
 
-        diff = (sdf_pred.squeeze(1) - sdf_target.squeeze(1)) ** 2
-        diff = diff * building_mask
-        return diff.sum() / (building_mask.sum() + 1e-7)
+        diff = (sdf_pred.squeeze(1) - sdf) ** 2
+        diff = diff * band
+        return diff.sum() / (band.sum() + 1e-7)
