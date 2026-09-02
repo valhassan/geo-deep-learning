@@ -10,6 +10,7 @@ from geo_deep_learning.models.encoders.dofa_v2 import (
     create_dofa_large,
 )
 from geo_deep_learning.models.heads.fcn_head import FCNHead
+from geo_deep_learning.models.heads.sdf_head import SdfHead
 from geo_deep_learning.models.heads.segmentation_head import (
     SegmentationHead,
     SegmentationOutput,
@@ -66,6 +67,7 @@ class DOFASegmentationModel(BaseSegmentationModel):
         )
 
         self.head = SegmentationHead(in_channels=256, num_classes=num_classes)
+        self.auxilary_head = SdfHead(in_channels=256)
 
         if freeze_layers:
             self._freeze_layers(layers=freeze_layers)
@@ -85,32 +87,23 @@ class DOFASegmentationModel(BaseSegmentationModel):
         wavelengths = self._normalize_wavelengths(wavelengths)
         return self.encoder(x, wavelengths)
 
+    @staticmethod
+    def _interp(x: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
+        """Bilinear upsample to `size`."""
+        return fn.interpolate(x, size=size, mode="bilinear", align_corners=False)
+
     def forward_decoder(
         self,
         feats: list[torch.Tensor],
         *,
         image_size: tuple[int, int],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run decoder + heads and return logits."""
-        logits = self.decoder(feats)
-        logits = self.head(logits)
-        logits = fn.interpolate(
-            input=logits,
-            size=image_size,
-            scale_factor=None,
-            mode="bilinear",
-            align_corners=False,
-        )
-
-        aux_logits = self.aux_head(feats[2])
-        aux_logits = fn.interpolate(
-            input=aux_logits,
-            size=image_size,
-            scale_factor=None,
-            mode="bilinear",
-            align_corners=False,
-        )
-        return logits, aux_logits
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run decoder + heads. Returns logits, aux logits, sdf."""
+        dec = self.decoder(feats)
+        logits = self._interp(self.head(dec), image_size)
+        sdf = self._interp(self.auxilary_head(dec), image_size)
+        aux_logits = self._interp(self.aux_head(feats[2]), image_size)
+        return logits, aux_logits, sdf
 
     def forward(
         self,
@@ -130,9 +123,9 @@ class DOFASegmentationModel(BaseSegmentationModel):
         """
         image_size = x.shape[2:]
         feats = self.forward_encoder(x, wavelengths)
-        logits, aux_logits = self.forward_decoder(feats, image_size=image_size)
+        logits, aux_logits, sdf = self.forward_decoder(feats, image_size=image_size)
 
-        aux_dict: dict[str, torch.Tensor] = {"aux": aux_logits}
+        aux_dict: dict[str, torch.Tensor] = {"aux": aux_logits, "sdf": sdf}
         if return_feat:
             aux_dict["feat"] = feats[-1]
 
