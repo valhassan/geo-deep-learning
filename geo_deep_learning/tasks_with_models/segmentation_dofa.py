@@ -8,17 +8,13 @@ from typing import Any
 
 import kornia as krn
 import torch
-import torch.nn.functional as fn
 from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
 from torch import Tensor, nn
 
 from geo_deep_learning.datasets.wds_dataset import GEO_KEYS
-from geo_deep_learning.models.heads.segmentation_head import SegmentationOutput
 from geo_deep_learning.models.segmentation.dofa import DOFASegmentationModel
-from geo_deep_learning.tools.augmentation.gridmask import FastGridMask
-from geo_deep_learning.tools.losses.lejepa import SIGReg
 from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
     denormalization,
@@ -56,9 +52,6 @@ class SegmentationDOFA(LightningModule):
         class_colors: list[str] | None = None,
         load_parts: str | list[str] | None = None,
         weights_from_checkpoint_path: str | None = None,
-        use_sigreg: bool = False,
-        lambda_sig: float = 0.05,
-        lambda_jepa: float = 0.05,
         **kwargs: object,  # noqa: ARG002
     ) -> None:
         """Initialize the model."""
@@ -78,9 +71,6 @@ class SegmentationDOFA(LightningModule):
         self.num_classes = num_classes
         self.threshold = 0.5
         self.loss = loss
-        self.use_sigreg = use_sigreg
-        self.lambda_sig = lambda_sig
-        self.lambda_jepa = lambda_jepa
         num_classes = num_classes + 1 if num_classes == 1 else num_classes
         self.labels = (
             [str(i) for i in range(num_classes)]
@@ -91,17 +81,6 @@ class SegmentationDOFA(LightningModule):
         self._total_samples_visualized = 0
 
         self.geometric_aug = self._geometric_aug()
-        self.gridmask = FastGridMask(grid_size=64, mask_ratio=0.6, p=1.0)
-        if self.use_sigreg:
-            if encoder == "dofa_base":
-                embed_dim = 768
-            elif encoder == "dofa_large":
-                embed_dim = 1024
-            self.sigreg = SIGReg(num_slices=256)
-            self.sigreg_proj = nn.Linear(embed_dim, 256)
-            self.jepa_predictor = nn.Sequential(nn.Linear(embed_dim, embed_dim),
-                                                nn.GELU(),
-                                                nn.Linear(embed_dim, embed_dim))
 
     def _geometric_aug(self) -> AugmentationSequential:
         return AugmentationSequential(
@@ -260,15 +239,14 @@ class SegmentationDOFA(LightningModule):
                 data_keys=["image", "mask", *["image"] * len(geo)],
             )
             batch["image"], batch["mask"] = out[0], out[1]
-            for key, tensor in zip(geo, out[2:], strict=True):
-                batch[key] = tensor
+            batch.update(dict(zip(geo, out[2:], strict=True)))
         batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
         return batch
 
     @staticmethod
     def _loss_kw(
         batch: dict[str, Any],
-        outputs: SegmentationOutput,
+        outputs: dict[str, Any],
     ) -> dict[str, Tensor | None]:
         kw = {k: batch.get(k) for k in GEO_KEYS}
         aux = outputs.aux or {}
@@ -291,44 +269,11 @@ class SegmentationDOFA(LightningModule):
 
         loss_main = self.loss(outputs.out, y, **loss_kw)
         loss_aux = self.loss(outputs.aux["aux"], y)
-        seg_loss = loss_main + 0.4 * loss_aux
-        total_loss = seg_loss
-        metrics = {
-            "seg_loss": seg_loss,
-        }
-        if self.use_sigreg:
-            x_ = self.gridmask(x.clone())
-            orig_feat = outputs.aux["feat"]
-            new_feat = self.model.forward_encoder(x_, wv)[-1]
-            b, c, _, _ = orig_feat.shape
-            z_orig = orig_feat.permute(0, 2, 3, 1).reshape(b, -1, c)
-            z_new = new_feat.permute(0, 2, 3, 1).reshape(b, -1, c)
-            z_orig = fn.layer_norm(z_orig, (z_orig.shape[-1],))
-            z_new  = fn.layer_norm(z_new,  (z_new.shape[-1],))
-            p_new = self.jepa_predictor(z_new)
-            jepa_loss = fn.mse_loss(p_new, z_orig.detach())
-            z_new_proj = self.sigreg_proj(z_new)
-            n = z_new_proj.shape[1]
-            m = min(256, n)
-            idx = torch.randint(n, (b, m), device=z_new_proj.device)
-            idx = idx.unsqueeze(-1).expand(-1, -1, z_new_proj.shape[-1])
-            z_new_proj = z_new_proj.gather(1, idx)
-            sigreg_loss = self.sigreg(z_new_proj)
-            total_loss = (
-                total_loss
-                + (self.lambda_jepa * jepa_loss)
-                + (self.lambda_sig * sigreg_loss)
-            )
-            metrics.update(
-                {
-                    "jepa_loss": jepa_loss,
-                    "sigreg_loss": sigreg_loss,
-                },
-            )
+        total_loss = loss_main + 0.4 * loss_aux
 
-        metrics.update({"train_loss": total_loss})
-        self.log_dict(
-            metrics,
+        self.log(
+            "train_loss",
+            total_loss,
             batch_size=batch_size,
             prog_bar=True,
             logger=True,
