@@ -248,7 +248,7 @@ class SegmentationDOFA(LightningModule):
         batch: dict[str, Any],
         outputs: dict[str, Any],
     ) -> dict[str, Tensor | None]:
-        kw = {k: batch.get(k) for k in GEO_KEYS}
+        kw = {k: batch.get(k) for k in (*GEO_KEYS, "buildings_geo")}
         aux = outputs.aux or {}
         kw["sdf_pred"] = aux.get("sdf")
         return kw
