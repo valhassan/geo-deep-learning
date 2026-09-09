@@ -73,6 +73,7 @@ class GeoAwareLoss(nn.Module):
         vertices: torch.Tensor | None = None,
         sdf_pred: torch.Tensor | None = None,
         sdf: torch.Tensor | None = None,
+        buildings_geo: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Scalar loss. Optional maps match tar stems; None skips that term."""
         if self.ignore_index is not None:
@@ -89,10 +90,12 @@ class GeoAwareLoss(nn.Module):
                 pred, gt, gt_b, ignore_mask, roads_centerline_weight, edt,
             )
             + self.alpha * self.boundary_loss(
-                pred, gt_b, ignore_mask, boundary, vertices,
+                pred, gt_b, ignore_mask, boundary, vertices, buildings_geo,
             )
             + self.beta_cldice * self.cldice_loss(pred, gt_b, ignore_mask)
-            + self.gamma_sdf * self._sdf_loss(sdf_pred, sdf, gt_b, ignore_mask)
+            + self.gamma_sdf * self._sdf_loss(
+                sdf_pred, sdf, gt_b, ignore_mask, buildings_geo,
+            )
         )
 
     def _weighted_ce(  # noqa: PLR0913
@@ -139,14 +142,19 @@ class GeoAwareLoss(nn.Module):
         sdf: torch.Tensor | None,
         gt_b: torch.Tensor,
         ignore_mask: torch.Tensor | None,
+        valid: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """MSE on |sdf| < 1, ignore-masked."""
-        if sdf_pred is None or sdf is None:
+        if sdf_pred is None:
             return gt_b.new_zeros(())
+        if sdf is None:
+            return (sdf_pred * 0).sum()
 
         sdf = sdf.squeeze(1)
         band = (sdf.abs() < 1.0).float()
         if ignore_mask is not None:
             band = band * ignore_mask
+        if valid is not None:
+            band = band * valid.view(-1, 1, 1).to(dtype=band.dtype)
         diff = (sdf_pred.squeeze(1) - sdf) ** 2 * band
         return diff.sum() / (band.sum() + 1e-7)
