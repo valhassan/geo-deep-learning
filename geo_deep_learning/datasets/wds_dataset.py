@@ -11,12 +11,37 @@ import torch
 import webdataset as wds
 import yaml
 from pytorch_lightning.utilities import rank_zero_only
+from torch.utils.data import default_collate
 
 from geo_deep_learning.tools.utils import manage_bands, normalization
 
 logger = logging.getLogger(__name__)
 
 GEO_KEYS = ("sdf", "edt", "boundary", "vertices", "roads_centerline_weight")
+_BUILDING_GEO = ("sdf", "edt", "boundary", "vertices")
+_ROAD_GEO = ("roads_centerline_weight",)
+_GEO_GROUPS = ((_BUILDING_GEO, "buildings_geo"), (_ROAD_GEO, "roads_geo"))
+
+
+def _collate_geo(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    geo = set(GEO_KEYS)
+    batch = default_collate(
+        [{k: v for k, v in s.items() if k not in geo} for s in samples],
+    )
+    n = len(samples)
+    for keys, flag in _GEO_GROUPS:
+        idx = [i for i, s in enumerate(samples) if keys[0] in s]
+        if not idx:
+            continue
+        valid = torch.zeros(n, dtype=torch.bool)
+        valid[idx] = True
+        batch[flag] = valid
+        ref = samples[idx[0]][keys[0]]
+        for key in keys:
+            t = ref.new_zeros((n, *ref.shape))
+            t[idx] = torch.stack([samples[i][key] for i in idx])
+            batch[key] = t
+    return batch
 
 
 @rank_zero_only
@@ -482,5 +507,9 @@ class ShardedDataset:
         return (
             dataset.decode(handler=wds.warn_and_continue)
             .map(self._process_sample, handler=wds.warn_and_continue)
-            .batched(self.batch_size, partial=self.split != "trn")
+            .batched(
+                self.batch_size,
+                collation_fn=_collate_geo,
+                partial=self.split != "trn",
+            )
         )
