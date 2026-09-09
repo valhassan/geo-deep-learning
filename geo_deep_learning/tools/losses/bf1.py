@@ -38,6 +38,7 @@ class BoundaryLoss(nn.Module):
         ignore_mask: torch.Tensor | None = None,
         vector_boundary: torch.Tensor | None = None,
         vertex_heatmap: torch.Tensor | None = None,
+        valid: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Forward pass.
@@ -78,16 +79,24 @@ class BoundaryLoss(nn.Module):
         )
         pred_b = pred_b - (1 - pred_soft)
 
-        if vector_boundary is not None:
-            gt_b = vector_boundary.expand(n, c, *vector_boundary.shape[2:])
-        else:
-            gt_b = fn.max_pool2d(
+        morph = None
+        if vector_boundary is None or (valid is not None and not bool(valid.all())):
+            morph = fn.max_pool2d(
                 1 - one_hot_gt,
                 kernel_size=self.theta0,
                 stride=1,
                 padding=(self.theta0 - 1) // 2,
             )
-            gt_b = gt_b - (1 - one_hot_gt)
+            morph = morph - (1 - one_hot_gt)
+        if vector_boundary is not None and (valid is None or bool(valid.any())):
+            vec = vector_boundary.expand(n, c, *vector_boundary.shape[2:])
+            if morph is None:
+                gt_b = vec
+            else:
+                v = valid.view(n, 1, 1, 1).to(dtype=vec.dtype)
+                gt_b = v * vec + (1.0 - v) * morph
+        else:
+            gt_b = morph
 
         gt_b_ext = fn.max_pool2d(
             gt_b,
@@ -112,7 +121,10 @@ class BoundaryLoss(nn.Module):
         # Importance = 1 + heatmap so baseline weight is 1 everywhere and
         # corners receive up to 2x the gradient of flat wall pixels.
         if vertex_heatmap is not None:
-            imp = (1.0 + vertex_heatmap).expand(n, c, *vertex_heatmap.shape[2:])
+            extra = vertex_heatmap
+            if valid is not None:
+                extra = extra * valid.view(n, 1, 1, 1).to(dtype=extra.dtype)
+            imp = (1.0 + extra).expand(n, c, *vertex_heatmap.shape[2:])
         else:
             imp = torch.ones_like(gt_b)
 
