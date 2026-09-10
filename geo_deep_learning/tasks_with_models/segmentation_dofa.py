@@ -268,7 +268,7 @@ class SegmentationDOFA(LightningModule):
         loss_kw = self._loss_kw(batch, outputs)
 
         loss_main = self.loss(outputs.out, y, **loss_kw)
-        loss_aux = self.loss(outputs.aux["aux"], y)
+        loss_aux = self.loss(outputs.aux["aux"], y, geo=False)
         total_loss = loss_main + 0.4 * loss_aux
 
         self.log(
