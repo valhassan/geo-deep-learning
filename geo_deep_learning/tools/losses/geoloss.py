@@ -74,8 +74,15 @@ class GeoAwareLoss(nn.Module):
         sdf_pred: torch.Tensor | None = None,
         sdf: torch.Tensor | None = None,
         buildings_geo: torch.Tensor | None = None,
+        *,
+        geo: bool = True,
     ) -> torch.Tensor:
-        """Scalar loss. Optional maps match tar stems; None skips that term."""
+        """Scalar loss. Optional maps skip if None; geo=False is Dice+CE."""
+        if not geo:
+            return self.region_loss(pred, gt) + self.lambda_ce * self.ce_loss(
+                pred, gt,
+            )
+
         if self.ignore_index is not None:
             ignore_mask = (gt != self.ignore_index).float()
             gt_b = gt.clone()
