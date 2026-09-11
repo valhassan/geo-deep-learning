@@ -10,7 +10,6 @@ from geo_deep_learning.models.encoders.dofa_v2 import (
     create_dofa_large,
 )
 from geo_deep_learning.models.heads.fcn_head import FCNHead
-from geo_deep_learning.models.heads.sdf_head import SdfHead
 from geo_deep_learning.models.heads.segmentation_head import (
     SegmentationHead,
     SegmentationOutput,
@@ -67,7 +66,6 @@ class DOFASegmentationModel(BaseSegmentationModel):
         )
 
         self.head = SegmentationHead(in_channels=256, num_classes=num_classes)
-        self.auxilary_head = SdfHead(in_channels=256)
 
         if freeze_layers:
             self._freeze_layers(layers=freeze_layers)
@@ -132,9 +130,9 @@ class DOFASegmentationModel(BaseSegmentationModel):
         """
         image_size = x.shape[2:]
         feats = self.forward_encoder(x, wavelengths)
-        logits, aux_logits, sdf = self.forward_decoder(feats, image_size=image_size)
+        logits, aux_logits = self.forward_decoder(feats, image_size=image_size)
 
-        aux_dict: dict[str, torch.Tensor] = {"aux": aux_logits, "sdf": sdf}
+        aux_dict: dict[str, torch.Tensor] = {"aux": aux_logits}
         if return_feat:
             aux_dict["feat"] = feats[-1]
 
