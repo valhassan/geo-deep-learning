@@ -262,13 +262,11 @@ class SegmentationDOFA(LightningModule):
         outputs = self(x, wv)
         loss_kw = self._loss_kw(batch)
 
-        loss_main = self.loss(outputs.out, y, **loss_kw)
-        loss_aux = self.loss(outputs.aux["aux"], y, geo=False)
-        total_loss = loss_main + 0.4 * loss_aux
+        loss = self.loss(outputs.out, y, **loss_kw)
 
         self.log(
             "train_loss",
-            total_loss,
+            loss,
             batch_size=batch_size,
             prog_bar=True,
             logger=True,
@@ -278,7 +276,7 @@ class SegmentationDOFA(LightningModule):
             rank_zero_only=False,
         )
 
-        return total_loss
+        return loss
 
     def validation_step(
         self,
