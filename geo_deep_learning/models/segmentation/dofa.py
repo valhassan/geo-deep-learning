@@ -9,7 +9,6 @@ from geo_deep_learning.models.encoders.dofa_v2 import (
     create_dofa_base,
     create_dofa_large,
 )
-from geo_deep_learning.models.heads.fcn_head import FCNHead
 from geo_deep_learning.models.heads.segmentation_head import (
     SegmentationHead,
     SegmentationOutput,
@@ -58,13 +57,6 @@ class DOFASegmentationModel(BaseSegmentationModel):
             align_corners=False,
             scale_modules=True,
         )
-        self.aux_head = FCNHead(
-            in_channels=self.embed_dim,
-            channels=256,
-            num_convs=1,
-            num_classes=num_classes,
-        )
-
         self.head = SegmentationHead(in_channels=256, num_classes=num_classes)
 
         if freeze_layers:
@@ -102,21 +94,17 @@ class DOFASegmentationModel(BaseSegmentationModel):
         feats: list[torch.Tensor],
         *,
         image_size: tuple[int, int],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run decoder + heads. Returns logits, aux logits."""
+    ) -> torch.Tensor:
+        """Run decoder + head. Returns logits at image size."""
         stride = self.encoder.patch_stride
         padded_size = (feats[0].shape[-2] * stride, feats[0].shape[-1] * stride)
         dec = self.decoder(feats)
-        logits = self._to_image(self.head(dec), image_size, padded_size)
-        aux_logits = self._to_image(self.aux_head(feats[2]), image_size, padded_size)
-        return logits, aux_logits
+        return self._to_image(self.head(dec), image_size, padded_size)
 
     def forward(
         self,
         x: torch.Tensor,
         wavelengths: torch.Tensor,
-        *,
-        return_feat: bool = True,
     ) -> SegmentationOutput:
         """
         Run full segmentation forward.
@@ -124,18 +112,13 @@ class DOFASegmentationModel(BaseSegmentationModel):
         Args:
             x: Input image tensor (B, C, H, W).
             wavelengths: Wavelength tensor (B, C) or (C,).
-            return_feat: If True, include last encoder feature map in aux as "feat".
 
         """
-        image_size = x.shape[2:]
-        feats = self.forward_encoder(x, wavelengths)
-        logits, aux_logits = self.forward_decoder(feats, image_size=image_size)
-
-        aux_dict: dict[str, torch.Tensor] = {"aux": aux_logits}
-        if return_feat:
-            aux_dict["feat"] = feats[-1]
-
-        return SegmentationOutput(out=logits, aux=aux_dict)
+        logits = self.forward_decoder(
+            self.forward_encoder(x, wavelengths),
+            image_size=x.shape[2:],
+        )
+        return SegmentationOutput(out=logits)
 
 
 if __name__ == "__main__":
@@ -143,5 +126,3 @@ if __name__ == "__main__":
     x = torch.randn(5, 3, 512, 512)
     wavelengths = torch.tensor([0.665, 0.549, 0.481])
     outputs = model(x, wavelengths)
-    # print(f"outputs.shape: {outputs.out.shape}")
-    # print(f"aux_outputs.shape: {outputs.aux.shape}")
