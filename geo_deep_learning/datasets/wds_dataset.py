@@ -17,8 +17,8 @@ from geo_deep_learning.tools.utils import manage_bands, normalization
 
 logger = logging.getLogger(__name__)
 
-GEO_KEYS = ("sdf", "edt", "boundary", "vertices", "roads_centerline_weight")
-_BUILDING_GEO = ("sdf", "edt", "boundary", "vertices")
+GEO_KEYS = ("edt", "boundary", "vertices", "roads_centerline_weight")
+_BUILDING_GEO = ("edt", "boundary", "vertices")
 _ROAD_GEO = ("roads_centerline_weight",)
 _GEO_GROUPS = ((_BUILDING_GEO, "buildings_geo"), (_ROAD_GEO, "roads_geo"))
 
@@ -319,7 +319,7 @@ class ShardedDataset:
             if arr is None:
                 continue
             t = torch.from_numpy(arr).float().reshape(1, *arr.shape[-2:])
-            out[key] = t if key == "sdf" else t / 255.0
+            out[key] = t / 255.0
         return out
 
     def _prepare_clay_output(
