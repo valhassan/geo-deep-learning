@@ -78,7 +78,8 @@ class SegmentationDOFA(LightningModule):
             else class_labels
         )
         self.iou = IoU(num_classes=num_classes, ignore_index=255)
-        self._total_samples_visualized = 0
+        self.iou_sensor = nn.ModuleDict()
+        self._viz_by_sensor: dict[str, int] = {}
 
         self.geometric_aug = self._geometric_aug()
 
@@ -316,6 +317,28 @@ class SegmentationDOFA(LightningModule):
 
         return y_hat
 
+    @staticmethod
+    def _platform(batch: dict[str, Any]) -> str | None:
+        p = batch.get("platform")
+        if p is None:
+            return None
+        if isinstance(p, (list, tuple)):
+            return str(p[0])
+        return str(p)
+
+    def on_test_start(self) -> None:
+        """Build per-sensor IoU from the datamodule (stable DDP keys)."""
+        if not self.iou_sensor:
+            datasets = getattr(self.trainer.datamodule, "datasets", {}) or {}
+            for name, splits in datasets.items():
+                if "tst" in splits:
+                    self.iou_sensor[name] = IoU(
+                        num_classes=self.iou.num_classes,
+                        ignore_index=255,
+                    )
+            self.iou_sensor.to(self.device)
+        self._viz_by_sensor = dict.fromkeys(self.iou_sensor, 0)
+
     def test_step(
         self,
         batch: dict[str, Any],
@@ -336,42 +359,49 @@ class SegmentationDOFA(LightningModule):
             y_hat = outputs.out.softmax(dim=1).argmax(dim=1)
 
         self.iou.update(y_hat, y)
+        platform = self._platform(batch)
+        if platform is not None and platform in self.iou_sensor:
+            self.iou_sensor[platform].update(y_hat, y)
 
-        self.log(
-            "test_loss",
-            loss,
-            batch_size=batch_size,
-            prog_bar=True,
-            logger=True,
-            on_step=False,
-            on_epoch=True,
-            sync_dist=True,
-            rank_zero_only=False,
-        )
+        log_kw = {
+            "batch_size": batch_size,
+            "logger": True,
+            "on_step": False,
+            "on_epoch": True,
+            "sync_dist": True,
+        }
+        self.log("test_loss", loss, prog_bar=True, rank_zero_only=False, **log_kw)
+        if platform is not None:
+            self.log(f"test/{platform}/loss", loss, **log_kw)
 
-        if self._total_samples_visualized < self.max_samples:
-            remaining_samples = self.max_samples - self._total_samples_visualized
-            samples_to_visualize = min(remaining_samples, len(x))
-            samples_visualized = self._log_visualizations(
-                trainer=self.trainer,
-                batch=batch,
-                outputs=y_hat,
-                max_samples=samples_to_visualize,
-                artifact_prefix="test",
-                epoch_suffix=False,
-            )
-            self._total_samples_visualized += samples_visualized
+        if platform is not None:
+            used = self._viz_by_sensor.get(platform, 0)
+            if used < self.max_samples:
+                n = self._log_visualizations(
+                    trainer=self.trainer,
+                    batch=batch,
+                    outputs=y_hat,
+                    max_samples=min(self.max_samples - used, len(x)),
+                    artifact_prefix=f"test/{platform}",
+                    epoch_suffix=False,
+                )
+                self._viz_by_sensor[platform] = used + (n or 0)
+
+    def _log_iou(self, metric: IoU, prefix: str) -> None:
+        per_class = metric.compute()
+        metrics = {
+            f"{prefix}iou_{label}": iou
+            for label, iou in zip(self.labels, per_class, strict=False)
+        }
+        metrics[f"{prefix}mean_iou"] = torch.nanmean(per_class)
+        self.log_dict(metrics, logger=True, sync_dist=True)
+        metric.reset()
 
     def on_test_epoch_end(self) -> None:
         """Compute and log IoU metrics at end of test epoch."""
-        per_class_iou = self.iou.compute()
-        metrics = {
-            f"iou_{label}": iou
-            for label, iou in zip(self.labels, per_class_iou, strict=False)
-        }
-        metrics["mean_iou"] = torch.nanmean(per_class_iou).item()
-        self.log_dict(metrics, logger=True, sync_dist=True)
-        self.iou.reset()
+        self._log_iou(self.iou, "")
+        for name, metric in self.iou_sensor.items():
+            self._log_iou(metric, f"test/{name}/")
 
     def _log_visualizations(  # noqa: PLR0913
         self,
