@@ -87,10 +87,17 @@ class DOFASegmentationModel(BaseSegmentationModel):
         wavelengths = self._normalize_wavelengths(wavelengths)
         return self.encoder(x, wavelengths)
 
-    @staticmethod
-    def _interp(x: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
-        """Bilinear upsample to `size`."""
-        return fn.interpolate(x, size=size, mode="bilinear", align_corners=False)
+    def _to_image(
+        self,
+        x: torch.Tensor,
+        image_size: tuple[int, int],
+        padded_size: tuple[int, int],
+    ) -> torch.Tensor:
+        x = fn.interpolate(x, size=padded_size, mode="bilinear", align_corners=False)
+        h, w = image_size
+        top = (x.shape[-2] - h) // 2
+        left = (x.shape[-1] - w) // 2
+        return x[..., top : top + h, left : left + w]
 
     def forward_decoder(
         self,
@@ -99,10 +106,12 @@ class DOFASegmentationModel(BaseSegmentationModel):
         image_size: tuple[int, int],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Run decoder + heads. Returns logits, aux logits, sdf."""
+        stride = self.encoder.patch_stride
+        padded_size = (feats[0].shape[-2] * stride, feats[0].shape[-1] * stride)
         dec = self.decoder(feats)
-        logits = self._interp(self.head(dec), image_size)
-        sdf = self._interp(self.auxilary_head(dec), image_size)
-        aux_logits = self._interp(self.aux_head(feats[2]), image_size)
+        logits = self._to_image(self.head(dec), image_size, padded_size)
+        sdf = self._to_image(self.auxilary_head(dec), image_size, padded_size)
+        aux_logits = self._to_image(self.aux_head(feats[2]), image_size, padded_size)
         return logits, aux_logits, sdf
 
     def forward(
