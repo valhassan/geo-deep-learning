@@ -245,14 +245,8 @@ class SegmentationDOFA(LightningModule):
         return batch
 
     @staticmethod
-    def _loss_kw(
-        batch: dict[str, Any],
-        outputs: dict[str, Any],
-    ) -> dict[str, Tensor | None]:
-        kw = {k: batch.get(k) for k in (*GEO_KEYS, "buildings_geo")}
-        aux = outputs.aux or {}
-        kw["sdf_pred"] = aux.get("sdf")
-        return kw
+    def _loss_kw(batch: dict[str, Any]) -> dict[str, Tensor | None]:
+        return {k: batch.get(k) for k in (*GEO_KEYS, "buildings_geo")}
 
     def training_step(
         self,
@@ -266,7 +260,7 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
-        loss_kw = self._loss_kw(batch, outputs)
+        loss_kw = self._loss_kw(batch)
 
         loss_main = self.loss(outputs.out, y, **loss_kw)
         loss_aux = self.loss(outputs.aux["aux"], y, geo=False)
@@ -298,7 +292,7 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
-        loss = self.loss(outputs.out, y, **self._loss_kw(batch, outputs))
+        loss = self.loss(outputs.out, y, **self._loss_kw(batch))
         self.log(
             "val_loss",
             loss,
@@ -351,7 +345,7 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
-        loss = self.loss(outputs.out, y, **self._loss_kw(batch, outputs))
+        loss = self.loss(outputs.out, y, **self._loss_kw(batch))
 
         if self.num_classes == 1:
             y_hat = (outputs.out.sigmoid().squeeze(1) > self.threshold).long()
