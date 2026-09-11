@@ -102,15 +102,14 @@ class DOFASegmentationModel(BaseSegmentationModel):
         feats: list[torch.Tensor],
         *,
         image_size: tuple[int, int],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Run decoder + heads. Returns logits, aux logits, sdf."""
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run decoder + heads. Returns logits, aux logits."""
         stride = self.encoder.patch_stride
         padded_size = (feats[0].shape[-2] * stride, feats[0].shape[-1] * stride)
         dec = self.decoder(feats)
         logits = self._to_image(self.head(dec), image_size, padded_size)
-        sdf = self._to_image(self.auxilary_head(dec), image_size, padded_size)
         aux_logits = self._to_image(self.aux_head(feats[2]), image_size, padded_size)
-        return logits, aux_logits, sdf
+        return logits, aux_logits
 
     def forward(
         self,
