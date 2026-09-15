@@ -5,16 +5,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import kornia as krn
 import torch
 import torch.nn.functional as fn
-from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
 from lightning.pytorch.utilities import rank_zero_only
 
 from geo_deep_learning.models.decoders.segformer_mlp import Decoder
 from geo_deep_learning.models.ssl.geojepa_mit import GeoJEPAMixTransformer
+from geo_deep_learning.tools.augmentation import RandomD4
 from geo_deep_learning.tools.augmentation.blur import RandomGSDSimulation
 from geo_deep_learning.tools.augmentation.noise import RandomPoissonNoise
 from geo_deep_learning.tools.augmentation.planckian import RandomPlanckianIllumination
@@ -82,7 +81,7 @@ class SSLMixTransformer(LightningModule):
         self.weights_from_checkpoint_path = weights_from_checkpoint_path
         self.probe_loss = probe_loss or torch.nn.CrossEntropyLoss()
         self.geojepa_loss = GeoJEPALoss(lambda_sig=self.lambda_sig)
-        self.geometric_aug = self._geometric_aug()
+        self.geometric_aug = RandomD4()
         self.planck = RandomPlanckianIllumination()
         self.gsd_aug = RandomGSDSimulation()
         self.noise_aug = RandomPoissonNoise()
@@ -98,20 +97,6 @@ class SSLMixTransformer(LightningModule):
         self.threshold = 0.5
         self.max_samples = max_samples
         self._total_samples_visualized = 0
-
-    def _geometric_aug(self) -> AugmentationSequential:
-        return AugmentationSequential(
-            krn.augmentation.RandomHorizontalFlip(p=0.5, keepdim=True),
-            krn.augmentation.RandomVerticalFlip(p=0.5, keepdim=True),
-            krn.augmentation.RandomRotation90(
-                times=(1, 3),
-                p=0.5,
-                align_corners=False,
-                keepdim=True,
-            ),
-            data_keys=["input"],
-            random_apply=False,
-        )
 
     def state_dict(
         self,
