@@ -1,20 +1,18 @@
 """Segmentation DOFA model."""
 
 import logging
-import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import kornia as krn
 import torch
-from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
 from torch import Tensor, nn
 
 from geo_deep_learning.datasets.wds_dataset import GEO_KEYS
 from geo_deep_learning.models.segmentation.dofa import DOFASegmentationModel
+from geo_deep_learning.tools.augmentation import RandomD4
 from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
     denormalization,
@@ -23,11 +21,6 @@ from geo_deep_learning.tools.utils import (
     standardization,
 )
 from geo_deep_learning.tools.visualization import visualize_prediction
-
-warnings.filterwarnings(
-    "ignore",
-    message="Default grid_sample and affine_grid behavior has changed",
-)
 
 logger = logging.getLogger(__name__)
 
@@ -81,21 +74,7 @@ class SegmentationDOFA(LightningModule):
         self.iou_sensor = nn.ModuleDict()
         self._viz_by_sensor: dict[str, int] = {}
 
-        self.geometric_aug = self._geometric_aug()
-
-    def _geometric_aug(self) -> AugmentationSequential:
-        return AugmentationSequential(
-            krn.augmentation.RandomHorizontalFlip(p=0.5, keepdim=True),
-            krn.augmentation.RandomVerticalFlip(p=0.5, keepdim=True),
-            krn.augmentation.RandomRotation90(
-                times=(1, 3),
-                p=0.5,
-                align_corners=False,
-                keepdim=True,
-            ),
-            data_keys=["image", "mask"],
-            random_apply=1,
-        )
+        self.geometric_aug = RandomD4()
 
     def state_dict(
         self,
@@ -237,7 +216,6 @@ class SegmentationDOFA(LightningModule):
                 batch["image"],
                 batch["mask"],
                 *[batch[k] for k in geo],
-                data_keys=["image", "mask", *["image"] * len(geo)],
             )
             batch["image"], batch["mask"] = out[0], out[1]
             batch.update(dict(zip(geo, out[2:], strict=True)))
