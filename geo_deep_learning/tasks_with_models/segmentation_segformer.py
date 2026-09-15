@@ -53,6 +53,7 @@ class SegmentationSegformer(LightningModule):
         weights: str | None = None,
         class_labels: list[str] | None = None,
         class_colors: list[str] | None = None,
+        load_parts: str | list[str] | None = None,
         weights_from_checkpoint_path: str | None = None,
         **kwargs: object,  # noqa: ARG002
     ) -> None:
@@ -71,6 +72,7 @@ class SegmentationSegformer(LightningModule):
         self.scheduler_config = scheduler_config or {"interval": "epoch"}
 
         self.weights = weights
+        self.load_parts = load_parts
         self.weights_from_checkpoint_path = weights_from_checkpoint_path
         self.use_dynamic_encoder = use_dynamic_encoder
         self.freeze_layers = freeze_layers
@@ -172,7 +174,6 @@ class SegmentationSegformer(LightningModule):
         )
         if self.weights_from_checkpoint_path:
             map_location = self.device
-            load_parts = self.hparams.get("load_parts")
             logger.info(
                 "Loading weights from checkpoint: %s",
                 self.weights_from_checkpoint_path,
@@ -180,7 +181,7 @@ class SegmentationSegformer(LightningModule):
             load_weights_from_checkpoint(
                 self.model,
                 self.weights_from_checkpoint_path,
-                load_parts=load_parts,
+                load_parts=self.load_parts,
                 map_location=map_location,
             )
 
