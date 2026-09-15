@@ -17,8 +17,8 @@ from geo_deep_learning.tools.utils import manage_bands, normalization
 
 logger = logging.getLogger(__name__)
 
-GEO_KEYS = ("edt", "boundary", "vertices", "roads_centerline_weight")
-_BUILDING_GEO = ("edt", "boundary", "vertices")
+GEO_KEYS = ("edt", "roads_centerline_weight")
+_BUILDING_GEO = ("edt",)
 _ROAD_GEO = ("roads_centerline_weight",)
 _GEO_GROUPS = ((_BUILDING_GEO, "buildings_geo"), (_ROAD_GEO, "roads_geo"))
 
