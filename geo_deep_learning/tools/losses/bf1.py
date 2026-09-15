@@ -6,7 +6,7 @@ from torch import nn
 
 
 class BoundaryLoss(nn.Module):
-    """Boundary F1 Loss, optionally vector-enhanced for buildings."""
+    """Boundary F1 Loss."""
 
     def __init__(
         self,
@@ -36,27 +36,16 @@ class BoundaryLoss(nn.Module):
         pred: torch.Tensor,
         gt: torch.Tensor,
         ignore_mask: torch.Tensor | None = None,
-        vector_boundary: torch.Tensor | None = None,
-        vertex_heatmap: torch.Tensor | None = None,
-        valid: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Forward pass.
 
         Args:
-            pred:             (N, C, H, W) raw logits.
-            gt:               (N, H, W) integer class indices.
-                              Must not contain ignore_index — zero it out before
-                              calling (handled in GeoAwareLoss.forward).
-            ignore_mask:      (N, H, W) float, 1 = valid pixel, 0 = ignored.
-            vector_boundary:  (N, 1, H, W) float32 [0, 1].
-                              Soft boundary map from polygon edges at sub-pixel
-                              precision. Replaces morphological gt_b when provided.
-                              Only meaningful for the building class channel.
-            vertex_heatmap:   (N, 1, H, W) float32 [0, 1].
-                              Gaussian blobs at polygon corners. Used as
-                              importance weight on precision and recall so corners
-                              receive stronger gradient than flat wall pixels.
+            pred:         (N, C, H, W) raw logits.
+            gt:           (N, H, W) integer class indices.
+                          Must not contain ignore_index — zero it out before
+                          calling (handled in GeoAwareLoss.forward).
+            ignore_mask:  (N, H, W) float, 1 = valid pixel, 0 = ignored.
 
         Returns:
             Scalar boundary loss: mean(1 - BF1) over classes and batch.
@@ -79,24 +68,13 @@ class BoundaryLoss(nn.Module):
         )
         pred_b = pred_b - (1 - pred_soft)
 
-        morph = None
-        if vector_boundary is None or (valid is not None and not bool(valid.all())):
-            morph = fn.max_pool2d(
-                1 - one_hot_gt,
-                kernel_size=self.theta0,
-                stride=1,
-                padding=(self.theta0 - 1) // 2,
-            )
-            morph = morph - (1 - one_hot_gt)
-        if vector_boundary is not None and (valid is None or bool(valid.any())):
-            vec = vector_boundary.expand(n, c, *vector_boundary.shape[2:])
-            if morph is None:
-                gt_b = vec
-            else:
-                v = valid.view(n, 1, 1, 1).to(dtype=vec.dtype)
-                gt_b = v * vec + (1.0 - v) * morph
-        else:
-            gt_b = morph
+        gt_b = fn.max_pool2d(
+            1 - one_hot_gt,
+            kernel_size=self.theta0,
+            stride=1,
+            padding=(self.theta0 - 1) // 2,
+        )
+        gt_b = gt_b - (1 - one_hot_gt)
 
         gt_b_ext = fn.max_pool2d(
             gt_b,
@@ -118,27 +96,16 @@ class BoundaryLoss(nn.Module):
             gt_b_ext = gt_b_ext * mask
             pred_b_ext = pred_b_ext * mask
 
-        # Importance = 1 + heatmap so baseline weight is 1 everywhere and
-        # corners receive up to 2x the gradient of flat wall pixels.
-        if vertex_heatmap is not None:
-            extra = vertex_heatmap
-            if valid is not None:
-                extra = extra * valid.view(n, 1, 1, 1).to(dtype=extra.dtype)
-            imp = (1.0 + extra).expand(n, c, *vertex_heatmap.shape[2:])
-        else:
-            imp = torch.ones_like(gt_b)
-
         gt_b = gt_b.view(n, c, -1)
         pred_b = pred_b.view(n, c, -1)
         gt_b_ext = gt_b_ext.view(n, c, -1)
         pred_b_ext = pred_b_ext.view(n, c, -1)
-        imp = imp.view(n, c, -1)
 
-        precision = torch.sum(pred_b * gt_b_ext * imp, dim=2) / (
-            torch.sum(pred_b * imp, dim=2) + 1e-7
+        precision = torch.sum(pred_b * gt_b_ext, dim=2) / (
+            torch.sum(pred_b, dim=2) + 1e-7
         )
-        recall = torch.sum(pred_b_ext * gt_b * imp, dim=2) / (
-            torch.sum(gt_b * imp, dim=2) + 1e-7
+        recall = torch.sum(pred_b_ext * gt_b, dim=2) / (
+            torch.sum(gt_b, dim=2) + 1e-7
         )
         bf1 = 2 * precision * recall / (precision + recall + 1e-7)
 
