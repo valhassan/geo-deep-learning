@@ -12,7 +12,7 @@ from torch import Tensor, nn
 
 from geo_deep_learning.datasets.wds_dataset import GEO_KEYS
 from geo_deep_learning.models.segmentation.dofa import DOFASegmentationModel
-from geo_deep_learning.tools.augmentation import RandomD4
+from geo_deep_learning.tools.augmentation import RandomD4, RandomPlanckian
 from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
     denormalization,
@@ -75,6 +75,7 @@ class SegmentationDOFA(LightningModule):
         self._viz_by_sensor: dict[str, int] = {}
 
         self.geometric_aug = RandomD4()
+        self.radiometric_aug = RandomPlanckian()
 
     def state_dict(
         self,
@@ -121,6 +122,7 @@ class SegmentationDOFA(LightningModule):
     def on_fit_start(self) -> None:
         """On fit start."""
         self.geometric_aug = self.geometric_aug.to(self.device)
+        self.radiometric_aug = self.radiometric_aug.to(self.device)
 
     def configure_optimizers(self) -> list[list[dict[str, Any]]]:
         """Configure optimizers."""
@@ -219,6 +221,10 @@ class SegmentationDOFA(LightningModule):
             )
             batch["image"], batch["mask"] = out[0], out[1]
             batch.update(dict(zip(geo, out[2:], strict=True)))
+            batch["image"] = self.radiometric_aug(
+                batch["image"],
+                batch["wavelengths"],
+            )
         batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
         return batch
 
