@@ -6,12 +6,12 @@ from torch import Tensor, nn
 
 def apply_d4(x: Tensor, k: Tensor, hflip: Tensor) -> Tensor:
     """Per-sample rot90(k) then optional hflip. k in {0,1,2,3}."""
-    out = x.clone()
+    v = (-1,) + (1,) * (x.ndim - 1)
+    k, hflip = k.view(v), hflip.view(v)
+    out = x
     for kk in (1, 2, 3):
-        sel = k == kk
-        out[sel] = torch.rot90(x[sel], kk, dims=(-2, -1))
-    out[hflip] = torch.flip(out[hflip], dims=(-1,))
-    return out
+        out = torch.where(k == kk, x.rot90(kk, (-2, -1)), out)
+    return torch.where(hflip, out.flip(-1), out)
 
 
 class RandomD4(nn.Module):
@@ -28,6 +28,7 @@ class RandomD4(nn.Module):
         hflip = torch.randint(0, 2, (batch,), device=device, dtype=torch.bool)
         return k, hflip
 
+    @torch.no_grad()
     def forward(self, *tensors: Tensor) -> Tensor | tuple[Tensor, ...]:
         """Apply one sampled D4 element to every spatial map."""
         ref = tensors[0]
