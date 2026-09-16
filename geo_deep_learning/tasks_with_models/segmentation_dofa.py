@@ -230,7 +230,7 @@ class SegmentationDOFA(LightningModule):
 
     @staticmethod
     def _loss_kw(batch: dict[str, Any]) -> dict[str, Tensor | None]:
-        return {k: batch.get(k) for k in (*GEO_KEYS, "buildings_geo")}
+        return {k: batch.get(k) for k in GEO_KEYS}
 
     def training_step(
         self,
