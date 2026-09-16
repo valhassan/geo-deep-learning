@@ -11,7 +11,7 @@ def apply_d4(x: Tensor, k: Tensor, hflip: Tensor) -> Tensor:
     out = x
     for kk in (1, 2, 3):
         out = torch.where(k == kk, x.rot90(kk, (-2, -1)), out)
-    return torch.where(hflip, out.flip(-1), out)
+    return torch.where(hflip, out.flip(-1), out).contiguous()
 
 
 class RandomD4(nn.Module):
