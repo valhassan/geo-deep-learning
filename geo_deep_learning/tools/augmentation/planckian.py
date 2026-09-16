@@ -5,6 +5,7 @@ from torch import Tensor, nn
 
 # Second radiation constant in µm·K (wavelengths are µm).
 _C2_UM_K = 14388.0
+_MIRED_K = 1e6
 
 
 class RandomPlanckian(nn.Module):
@@ -12,6 +13,8 @@ class RandomPlanckian(nn.Module):
     Relative blackbody gains B(λ, T) / B(λ, T_ref), mean-locked to 1.
 
     Image-only. λ^-5 cancels in the ratio. Gains computed in fp32.
+    CCT sampled uniform in mireds (1e6/T) over cct_range, then converted
+    to Kelvin.
     """
 
     def __init__(
@@ -36,14 +39,17 @@ class RandomPlanckian(nn.Module):
         if lam.ndim == 1:
             lam = lam.expand(b, c)
         lo, hi = self.cct_range
-        temp = torch.rand(b, 1, device=lam.device, dtype=torch.float32)
-        temp = temp * (hi - lo) + lo
+        m_lo, m_hi = _MIRED_K / hi, _MIRED_K / lo
+        mired = torch.rand(b, 1, device=lam.device, dtype=torch.float32)
+        mired = mired * (m_hi - m_lo) + m_lo
+        temp = _MIRED_K / mired
         gains = torch.expm1(_C2_UM_K / (lam * self.t_ref)) / torch.expm1(
             _C2_UM_K / (lam * temp),
         )
         gains = gains / gains.mean(dim=-1, keepdim=True).clamp_min(1e-12)
         return gains.view(b, c, 1, 1)
 
+    @torch.no_grad()
     def forward(self, x: Tensor, wavelengths: Tensor) -> Tensor:
         """Apply illuminant gains to x in [0, 1]."""
         gains = self.sample(x, wavelengths)
