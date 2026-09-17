@@ -15,6 +15,7 @@ def run_export(
     model: str,
     checkpoint_path: str,
     output_path: str,
+    metadata_path: str | None = None,
 ) -> None:
     """Dispatch to task module's export_model."""
     if model not in EXPORTERS:
@@ -27,6 +28,7 @@ def run_export(
     mod.export_model(
         checkpoint_path=checkpoint_path,
         output_path=output_path,
+        metadata_path=metadata_path,
     )
 
 
@@ -52,9 +54,14 @@ def main() -> None:
         required=True,
         help="Path for output (.pt2)",
     )
+    parser.add_argument(
+        "--metadata",
+        required=False,
+        help="Path to metadata (.json)",
+    )
     args = parser.parse_args()
 
-    run_export(args.model, args.checkpoint, args.output)
+    run_export(args.model, args.checkpoint, args.output, args.metadata)
 
 
 if __name__ == "__main__":
