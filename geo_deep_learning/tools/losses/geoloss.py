@@ -41,15 +41,12 @@ class GeoAwareLoss(nn.Module):
             classes=classes, theta0=theta0, theta=theta,
         )
 
-    def forward(  # noqa: PLR0913
+    def forward(
         self,
         pred: torch.Tensor,
         gt: torch.Tensor,
         roads_centerline_weight: torch.Tensor | None = None,
         edt: torch.Tensor | None = None,
-        boundary: torch.Tensor | None = None,
-        vertices: torch.Tensor | None = None,
-        buildings_geo: torch.Tensor | None = None,
         *,
         geo: bool = True,
     ) -> torch.Tensor:
@@ -72,9 +69,7 @@ class GeoAwareLoss(nn.Module):
             + self.lambda_ce * self._weighted_ce(
                 pred, gt, gt_b, ignore_mask, roads_centerline_weight, edt,
             )
-            + self.alpha * self.boundary_loss(
-                pred, gt_b, ignore_mask, boundary, vertices, buildings_geo,
-            )
+            + self.alpha * self.boundary_loss(pred, gt_b, ignore_mask)
         )
 
     def _weighted_ce(  # noqa: PLR0913
