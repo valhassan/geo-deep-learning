@@ -11,10 +11,37 @@ import torch
 import webdataset as wds
 import yaml
 from pytorch_lightning.utilities import rank_zero_only
+from torch.utils.data import default_collate
 
 from geo_deep_learning.tools.utils import manage_bands, normalization
 
 logger = logging.getLogger(__name__)
+
+GEO_KEYS = ("edt", "roads_centerline_weight")
+_BUILDING_GEO = ("edt",)
+_ROAD_GEO = ("roads_centerline_weight",)
+_GEO_GROUPS = ((_BUILDING_GEO, "buildings_geo"), (_ROAD_GEO, "roads_geo"))
+
+
+def _collate_geo(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    geo = set(GEO_KEYS)
+    batch = default_collate(
+        [{k: v for k, v in s.items() if k not in geo} for s in samples],
+    )
+    n = len(samples)
+    for keys, flag in _GEO_GROUPS:
+        idx = [i for i, s in enumerate(samples) if keys[0] in s]
+        if not idx:
+            continue
+        valid = torch.zeros(n, dtype=torch.bool)
+        valid[idx] = True
+        batch[flag] = valid
+        ref = samples[idx[0]][keys[0]]
+        for key in keys:
+            t = ref.new_zeros((n, *ref.shape))
+            t[idx] = torch.stack([samples[i][key] for i in idx])
+            batch[key] = t
+    return batch
 
 
 @rank_zero_only
@@ -159,7 +186,6 @@ class ShardedDataset:
         split: str = "trn",
         batch_size: int = 16,
         shuffle_buffer: int = 1000,
-        shardshuffle: int | None = None,
         seed: int = 42,
         epoch_size: int | None = None,
         mean: list[float] | None = None,
@@ -179,7 +205,6 @@ class ShardedDataset:
             split: Data split - "trn", "val", "tst"
             batch_size: Batch size
             shuffle_buffer: Number of batches to prefetch for shuffling
-            shardshuffle: Number of shards to shuffle
             seed: Random seed for shuffling
             epoch_size: Size of epoch (for infinite streaming)
             mean: Optional list of mean values for normalization
@@ -197,7 +222,6 @@ class ShardedDataset:
         self.batch_size = batch_size
         self.epoch_size = epoch_size
         self.shuffle_buffer = shuffle_buffer
-        self.shardshuffle = shardshuffle
         self.patch_count = patch_count
         self.band_indices = band_indices
         self.norm_stats = self._load_normalization_stats(
@@ -280,11 +304,23 @@ class ShardedDataset:
 
         # Prepare output based on model type
         if self.model_type == "clay":
-            return self._prepare_clay_output(image, label, metadata, sample["__key__"])
-        if self.model_type == "dofa":
-            return self._prepare_dofa_output(image, label, metadata, sample["__key__"])
-        # unified
-        return self._prepare_generic_output(image, label, metadata, sample["__key__"])
+            out = self._prepare_clay_output(image, label, metadata, sample["__key__"])
+        elif self.model_type == "dofa":
+            out = self._prepare_dofa_output(image, label, metadata, sample["__key__"])
+        else:
+            out = self._prepare_generic_output(
+                image,
+                label,
+                metadata,
+                sample["__key__"],
+            )
+        for key in GEO_KEYS:
+            arr = sample.get(f"{key}.npy")
+            if arr is None:
+                continue
+            t = torch.from_numpy(arr).float().reshape(1, *arr.shape[-2:])
+            out[key] = t / 255.0
+        return out
 
     def _prepare_clay_output(
         self,
@@ -471,5 +507,9 @@ class ShardedDataset:
         return (
             dataset.decode(handler=wds.warn_and_continue)
             .map(self._process_sample, handler=wds.warn_and_continue)
-            .batched(self.batch_size, partial=self.split != "trn")
+            .batched(
+                self.batch_size,
+                collation_fn=_collate_geo,
+                partial=self.split != "trn",
+            )
         )

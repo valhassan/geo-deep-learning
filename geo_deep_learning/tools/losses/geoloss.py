@@ -1,11 +1,8 @@
-"""
-GeoAware Loss for semantic segmentation.
-
-Combines Dice, CE and Boundary F1 (targeting sharp geometries) losses.
-"""
+"""GeoAware loss: Dice + CE + BF1."""
 
 import segmentation_models_pytorch as smp
 import torch
+import torch.nn.functional as fn
 from torch import nn
 
 from geo_deep_learning.tools.losses.bf1 import BoundaryLoss
@@ -16,78 +13,98 @@ class GeoAwareLoss(nn.Module):
 
     def __init__(  # noqa: PLR0913
         self,
-        classes: list[int] | None = None,
+        classes: list[int],
         alpha: float = 0.2,
         lambda_ce: float = 0.1,
-        ce_smooth: float = 0.1,
-        ce_weights: list[float] | None = None,
         theta0: int = 3,
         theta: int = 5,
         ignore_index: int | None = 255,
     ) -> None:
-        """
-        Initialize GeoAware Loss.
+        """Initialize. `classes` is required (BF1 indices, e.g. [4])."""
+        if not classes:
+            msg = "classes is required for BF1 (e.g. [4] for buildings)"
+            raise ValueError(msg)
 
-        Args:
-            classes: list of integers representing target classes indices
-            alpha: weight multiplier for the boundary loss
-            lambda_ce: weight multiplier for the cross entropy loss
-            ce_smooth: smooth factor for the cross entropy loss
-            ce_weights: weights for the cross entropy loss
-            theta0: kernel size for the boundary loss
-            theta: kernel size for the boundary loss
-            ignore_index: index of the ignored class, None for no ignored class
-
-        """
         super().__init__()
         self.alpha = alpha
         self.lambda_ce = lambda_ce
         self.ignore_index = ignore_index
 
-        # Region Loss: Handles the holistic geometry over all classes
         self.region_loss = smp.losses.DiceLoss(
             mode="multiclass",
-            smooth=1e-5,
-            from_logits=True,
             ignore_index=self.ignore_index,
         )
-
-        # Pixel Loss: Regularizer for gradient stability
-        weights = torch.tensor(ce_weights, dtype=torch.float) if ce_weights else None
         self.ce_loss = nn.CrossEntropyLoss(
-            weight=weights,
             ignore_index=self.ignore_index if self.ignore_index is not None else -100,
-            label_smoothing=ce_smooth,
         )
-
-        # Boundary Loss: Acts as a scalpel for specific geometric classes
         self.boundary_loss = BoundaryLoss(
-            classes=classes,
-            theta0=theta0,
-            theta=theta,
+            classes=classes, theta0=theta0, theta=theta,
         )
 
-    def forward(self, pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass.
-
-        Args:
-            pred: (N, C, H, W) raw logits
-            gt: (N, H, W) integer class indices
-
-        Returns:
-            Total loss
-
-        """
-        l_region = self.region_loss(pred, gt)
-        l_ce = self.ce_loss(pred, gt)
-        gt_b = gt.clone()
-        ignore_mask = None
+    def forward(  # noqa: PLR0913
+        self,
+        pred: torch.Tensor,
+        gt: torch.Tensor,
+        roads_centerline_weight: torch.Tensor | None = None,
+        edt: torch.Tensor | None = None,
+        boundary: torch.Tensor | None = None,
+        vertices: torch.Tensor | None = None,
+        buildings_geo: torch.Tensor | None = None,
+        *,
+        geo: bool = True,
+    ) -> torch.Tensor:
+        """Scalar loss. Optional maps skip if None; geo=False is Dice+CE."""
+        if not geo:
+            return self.region_loss(pred, gt) + self.lambda_ce * self.ce_loss(
+                pred, gt,
+            )
 
         if self.ignore_index is not None:
             ignore_mask = (gt != self.ignore_index).float()
+            gt_b = gt.clone()
             gt_b[gt_b == self.ignore_index] = 0
+        else:
+            ignore_mask = None
+            gt_b = gt
 
-        l_boundary = self.boundary_loss(pred, gt_b, ignore_mask)
+        return (
+            self.region_loss(pred, gt)
+            + self.lambda_ce * self._weighted_ce(
+                pred, gt, gt_b, ignore_mask, roads_centerline_weight, edt,
+            )
+            + self.alpha * self.boundary_loss(
+                pred, gt_b, ignore_mask, boundary, vertices, buildings_geo,
+            )
+        )
 
-        return l_region + (self.lambda_ce * l_ce) + (self.alpha * l_boundary)
+    def _weighted_ce(  # noqa: PLR0913
+        self,
+        pred: torch.Tensor,
+        gt: torch.Tensor,
+        gt_b: torch.Tensor,
+        ignore_mask: torch.Tensor | None,
+        roads_centerline_weight: torch.Tensor | None,
+        edt: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """CE; geometry maps add to pixel weight."""
+        if roads_centerline_weight is None and edt is None:
+            return self.ce_loss(pred, gt)
+
+        pixel_weight = torch.ones(
+            pred.shape[0],
+            pred.shape[2],
+            pred.shape[3],
+            device=pred.device,
+            dtype=pred.dtype,
+        )
+        if roads_centerline_weight is not None:
+            pixel_weight = pixel_weight + roads_centerline_weight.squeeze(1)
+        if edt is not None:
+            pixel_weight = pixel_weight + edt.squeeze(1)
+        if ignore_mask is not None:
+            pixel_weight = pixel_weight * ignore_mask
+
+        log_probs = fn.log_softmax(pred, dim=1)
+        nll = -log_probs.gather(1, gt_b.unsqueeze(1)).squeeze(1)
+        nll = nll * pixel_weight
+        return nll.sum() / (pixel_weight.sum() + 1e-7)

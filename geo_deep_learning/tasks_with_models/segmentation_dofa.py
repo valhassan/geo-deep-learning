@@ -2,19 +2,18 @@
 
 import json
 import logging
-import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import kornia as krn
 import torch
-from kornia.augmentation import AugmentationSequential
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.cli import LRSchedulerCallable, OptimizerCallable
 from torch import Tensor, nn
 
+from geo_deep_learning.datasets.wds_dataset import GEO_KEYS
 from geo_deep_learning.models.segmentation.dofa import DOFASegmentationModel
+from geo_deep_learning.tools.augmentation import RandomD4, RandomPlanckian
 from geo_deep_learning.tools.metrics.segmentation_iou import IoU
 from geo_deep_learning.tools.utils import (
     denormalization,
@@ -23,11 +22,6 @@ from geo_deep_learning.tools.utils import (
     standardization,
 )
 from geo_deep_learning.tools.visualization import visualize_prediction
-
-warnings.filterwarnings(
-    "ignore",
-    message="Default grid_sample and affine_grid behavior has changed",
-)
 
 logger = logging.getLogger(__name__)
 
@@ -78,37 +72,11 @@ class SegmentationDOFA(LightningModule):
             else class_labels
         )
         self.iou = IoU(num_classes=num_classes, ignore_index=255)
-        self._total_samples_visualized = 0
+        self.iou_sensor = nn.ModuleDict()
+        self._viz_by_sensor: dict[str, int] = {}
 
-        self.geometric_aug = self._geometric_aug()
-        self.radiometric_aug = self._radiometric_aug()
-
-    def _geometric_aug(self) -> AugmentationSequential:
-        return AugmentationSequential(
-            krn.augmentation.RandomHorizontalFlip(p=0.5, keepdim=True),
-            krn.augmentation.RandomVerticalFlip(p=0.5, keepdim=True),
-            krn.augmentation.RandomRotation90(
-                times=(1, 3),
-                p=0.5,
-                align_corners=False,
-                keepdim=True,
-            ),
-            data_keys=["image", "mask"],
-            random_apply=1,
-        )
-
-    def _radiometric_aug(self) -> AugmentationSequential:
-        return AugmentationSequential(
-            krn.augmentation.RandomClahe(
-                clip_limit=(10.0, 10.0),
-                grid_size=(32, 32),
-                slow_and_differentiable=False,
-                p=0.7,
-                keepdim=True,
-            ),
-            data_keys=["image"],
-            random_apply=False,
-        )
+        self.geometric_aug = RandomD4()
+        self.radiometric_aug = RandomPlanckian()
 
     def state_dict(
         self,
@@ -246,13 +214,24 @@ class SegmentationDOFA(LightningModule):
     ) -> dict[str, Any]:
         """On after batch transfer."""
         if self.trainer.training:
-            x, y = self.geometric_aug(batch["image"], batch["mask"])
-            batch["mask"] = y
-            x = self.radiometric_aug(x)
-            batch["image"] = torch.clamp(x, 0.0, 1.0)
-
+            geo = [k for k in GEO_KEYS if k in batch]
+            out = self.geometric_aug(
+                batch["image"],
+                batch["mask"],
+                *[batch[k] for k in geo],
+            )
+            batch["image"], batch["mask"] = out[0], out[1]
+            batch.update(dict(zip(geo, out[2:], strict=True)))
+            batch["image"] = self.radiometric_aug(
+                batch["image"],
+                batch["wavelengths"],
+            )
         batch["image"] = standardization(batch["image"], batch["mean"], batch["std"])
         return batch
+
+    @staticmethod
+    def _loss_kw(batch: dict[str, Any]) -> dict[str, Tensor | None]:
+        return {k: batch.get(k) for k in GEO_KEYS}
 
     def training_step(
         self,
@@ -266,9 +245,10 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
-        loss_main = self.loss(outputs.out, y)
-        loss_aux = self.loss(outputs.aux["aux"], y)
-        loss = loss_main + 0.4 * loss_aux
+        loss_kw = self._loss_kw(batch)
+
+        loss = self.loss(outputs.out, y, **loss_kw)
+
         self.log(
             "train_loss",
             loss,
@@ -295,7 +275,7 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
-        loss = self.loss(outputs.out, y)
+        loss = self.loss(outputs.out, y, **self._loss_kw(batch))
         self.log(
             "val_loss",
             loss,
@@ -314,6 +294,28 @@ class SegmentationDOFA(LightningModule):
 
         return y_hat
 
+    @staticmethod
+    def _platform(batch: dict[str, Any]) -> str | None:
+        p = batch.get("platform")
+        if p is None:
+            return None
+        if isinstance(p, (list, tuple)):
+            return str(p[0])
+        return str(p)
+
+    def on_test_start(self) -> None:
+        """Build per-sensor IoU from the datamodule (stable DDP keys)."""
+        if not self.iou_sensor:
+            datasets = getattr(self.trainer.datamodule, "datasets", {}) or {}
+            for name, splits in datasets.items():
+                if "tst" in splits:
+                    self.iou_sensor[name] = IoU(
+                        num_classes=self.iou.num_classes,
+                        ignore_index=255,
+                    )
+            self.iou_sensor.to(self.device)
+        self._viz_by_sensor = dict.fromkeys(self.iou_sensor, 0)
+
     def test_step(
         self,
         batch: dict[str, Any],
@@ -326,7 +328,7 @@ class SegmentationDOFA(LightningModule):
         batch_size = x.shape[0]
         y = y.squeeze(1).long()
         outputs = self(x, wv)
-        loss = self.loss(outputs.out, y)
+        loss = self.loss(outputs.out, y, **self._loss_kw(batch))
 
         if self.num_classes == 1:
             y_hat = (outputs.out.sigmoid().squeeze(1) > self.threshold).long()
@@ -334,42 +336,49 @@ class SegmentationDOFA(LightningModule):
             y_hat = outputs.out.softmax(dim=1).argmax(dim=1)
 
         self.iou.update(y_hat, y)
+        platform = self._platform(batch)
+        if platform is not None and platform in self.iou_sensor:
+            self.iou_sensor[platform].update(y_hat, y)
 
-        self.log(
-            "test_loss",
-            loss,
-            batch_size=batch_size,
-            prog_bar=True,
-            logger=True,
-            on_step=False,
-            on_epoch=True,
-            sync_dist=True,
-            rank_zero_only=False,
-        )
+        log_kw = {
+            "batch_size": batch_size,
+            "logger": True,
+            "on_step": False,
+            "on_epoch": True,
+            "sync_dist": True,
+        }
+        self.log("test_loss", loss, prog_bar=True, rank_zero_only=False, **log_kw)
+        if platform is not None:
+            self.log(f"test/{platform}/loss", loss, **log_kw)
 
-        if self._total_samples_visualized < self.max_samples:
-            remaining_samples = self.max_samples - self._total_samples_visualized
-            samples_to_visualize = min(remaining_samples, len(x))
-            samples_visualized = self._log_visualizations(
-                trainer=self.trainer,
-                batch=batch,
-                outputs=y_hat,
-                max_samples=samples_to_visualize,
-                artifact_prefix="test",
-                epoch_suffix=False,
-            )
-            self._total_samples_visualized += samples_visualized
+        if platform is not None:
+            used = self._viz_by_sensor.get(platform, 0)
+            if used < self.max_samples:
+                n = self._log_visualizations(
+                    trainer=self.trainer,
+                    batch=batch,
+                    outputs=y_hat,
+                    max_samples=min(self.max_samples - used, len(x)),
+                    artifact_prefix=f"test/{platform}",
+                    epoch_suffix=False,
+                )
+                self._viz_by_sensor[platform] = used + (n or 0)
+
+    def _log_iou(self, metric: IoU, prefix: str) -> None:
+        per_class = metric.compute()
+        metrics = {
+            f"{prefix}iou_{label}": iou
+            for label, iou in zip(self.labels, per_class, strict=False)
+        }
+        metrics[f"{prefix}mean_iou"] = torch.nanmean(per_class)
+        self.log_dict(metrics, logger=True, sync_dist=True)
+        metric.reset()
 
     def on_test_epoch_end(self) -> None:
         """Compute and log IoU metrics at end of test epoch."""
-        per_class_iou = self.iou.compute()
-        metrics = {
-            f"iou_{label}": iou
-            for label, iou in zip(self.labels, per_class_iou, strict=False)
-        }
-        metrics["mean_iou"] = torch.nanmean(per_class_iou).item()
-        self.log_dict(metrics, logger=True, sync_dist=True)
-        self.iou.reset()
+        self._log_iou(self.iou, "")
+        for name, metric in self.iou_sensor.items():
+            self._log_iou(metric, f"test/{name}/")
 
     def _log_visualizations(  # noqa: PLR0913
         self,

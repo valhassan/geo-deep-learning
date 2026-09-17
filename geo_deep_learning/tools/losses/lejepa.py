@@ -7,31 +7,22 @@ from __future__ import annotations
 import torch
 from torch import distributed as dist
 from torch import nn
-
-try:
-    from torch.distributed._functional_collectives import (
-        all_reduce as functional_all_reduce,
-    )
-except ImportError:
-    functional_all_reduce = None
+from torch.distributed._functional_collectives import (
+    all_reduce as functional_all_reduce,
+)
 
 
 def ddp_all_reduce_avg(x: torch.Tensor) -> torch.Tensor:
     """Average across ranks (no-op if not in DDP)."""
     if dist.is_available() and dist.is_initialized():
-        if functional_all_reduce is not None:
-            return functional_all_reduce(x, "avg", dist.group.WORLD)
-        dist.all_reduce(x, op=dist.ReduceOp.SUM)
-        return x / dist.get_world_size()
+        return functional_all_reduce(x, "avg", dist.group.WORLD)
     return x
 
 
 def ddp_all_reduce_max(x: torch.Tensor) -> torch.Tensor:
     """Max across ranks (no-op if not in DDP)."""
     if dist.is_available() and dist.is_initialized():
-        if functional_all_reduce is not None:
-            return functional_all_reduce(x, "max", dist.group.WORLD)
-        dist.all_reduce(x, op=dist.ReduceOp.MAX)
+        return functional_all_reduce(x, "max", dist.group.WORLD)
     return x
 
 
@@ -175,8 +166,8 @@ class SIGReg(nn.Module):
 
     def __init__(
         self,
-        num_slices: int = 256,
-        t_max: float = 3.0,
+        num_slices: int = 1024,
+        t_max: float = 5.0,
         n_points: int = 17,
         reduction: str = "mean",
         clip_value: float | None = None,
@@ -199,7 +190,7 @@ class SIGReg(nn.Module):
 class LeJEPALoss(nn.Module):
     """LeJEPA loss."""
 
-    def __init__(self, lambda_sig: float = 0.5, **kwargs: object) -> None:
+    def __init__(self, lambda_sig: float = 0.05, **kwargs: object) -> None:
         """Initialize the LeJEPALoss."""
         super().__init__()
         self.lambda_sig = lambda_sig
@@ -207,6 +198,7 @@ class LeJEPALoss(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Run the LeJEPALoss."""
-        inv_loss = (x.mean(0) - x).pow(2).mean()
+        mu = x[:2].mean(0)
+        inv_loss = (mu - x).pow(2).mean()
         sig_loss = self.sigreg(x)
         return self.lambda_sig * sig_loss + (1 - self.lambda_sig) * inv_loss

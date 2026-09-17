@@ -28,7 +28,7 @@ class MultiSensorDataModule(LightningDataModule):
         num_workers: int = 0,
         prefetch_factor: int | None = None,
         shuffle_buffer: int = 0,
-        shardshuffle: int | None = None,
+        mix_temperature: float = 0.5,
         seed: int | None = None,
     ) -> None:
         """
@@ -45,7 +45,8 @@ class MultiSensorDataModule(LightningDataModule):
             num_workers: Number of worker processes
             prefetch_factor: Number of batches to prefetch
             shuffle_buffer: Number of batches to prefetch for shuffling
-            shardshuffle: Number of shards to shuffle
+            mix_temperature: Train RandomMix exponent. p_i ∝ n_i^T
+                (0=equal, 0.5=sqrt, 1=counts). Val/test always use 1.
             seed: Random seed for shuffling
 
         """
@@ -57,7 +58,7 @@ class MultiSensorDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
         self.shuffle_buffer = shuffle_buffer
-        self.shardshuffle = shardshuffle
+        self.mix_temperature = mix_temperature
         self.seed = seed
         self.patch_size = patch_size
         self.mean = mean
@@ -85,7 +86,6 @@ class MultiSensorDataModule(LightningDataModule):
             mean=self.mean,
             std=self.std,
             shuffle_buffer=self.shuffle_buffer,
-            shardshuffle=self.shardshuffle,
             seed=self.seed,
         )
         self._compute_patch_counts()
@@ -152,12 +152,14 @@ class MultiSensorDataModule(LightningDataModule):
             return
 
         if len(train_datasets) == 1:
-            # Single sensor
             sensor_name = next(iter(train_datasets.keys()))
             sensor_dataset = train_datasets[sensor_name]
         else:
-            # Multiple sensors
-            sensor_dataset = self._create_mixed_dataset(train_datasets)
+            sensor_dataset = self._create_mixed_dataset(
+                train_datasets,
+                split="trn",
+                temperature=self.mix_temperature,
+            )
 
         self.train_loader = WebLoader(
             sensor_dataset,
@@ -186,12 +188,14 @@ class MultiSensorDataModule(LightningDataModule):
             return
 
         if len(val_datasets) == 1:
-            # Single sensor
             sensor_name = next(iter(val_datasets.keys()))
             sensor_dataset = val_datasets[sensor_name]
         else:
-            # Multiple sensors
-            sensor_dataset = self._create_mixed_dataset(val_datasets)
+            sensor_dataset = self._create_mixed_dataset(
+                val_datasets,
+                split="val",
+                temperature=1.0,
+            )
 
         self.val_loader = WebLoader(
             sensor_dataset,
@@ -218,12 +222,14 @@ class MultiSensorDataModule(LightningDataModule):
             return
 
         if len(test_datasets) == 1:
-            # Single sensor
             sensor_name = next(iter(test_datasets.keys()))
             sensor_dataset = test_datasets[sensor_name]
         else:
-            # Multiple sensors
-            sensor_dataset = self._create_mixed_dataset(test_datasets)
+            sensor_dataset = self._create_mixed_dataset(
+                test_datasets,
+                split="tst",
+                temperature=1.0,
+            )
 
         self.test_loader = WebLoader(
             sensor_dataset,
@@ -234,16 +240,43 @@ class MultiSensorDataModule(LightningDataModule):
             persistent_workers=(self.num_workers > 0),
         )
 
+    def _mix_probs(
+        self,
+        sensor_names: list[str],
+        split: str,
+        temperature: float,
+    ) -> list[float]:
+        """p_i ∝ n_i^temperature. T=0 equal, T=1 ∝ counts."""
+        counts = [
+            max(self.datasets[name][split].patch_count, 1) for name in sensor_names
+        ]
+        weights = [count**temperature for count in counts]
+        total = sum(weights)
+        probs = [weight / total for weight in weights]
+        logger.info(
+            "Sensor mix %s T=%.2f: %s",
+            split,
+            temperature,
+            ", ".join(
+                f"{name}={prob:.4f} (n={count})"
+                for name, prob, count in zip(
+                    sensor_names, probs, counts, strict=True,
+                )
+            ),
+        )
+        return probs
+
     def _create_mixed_dataset(
         self,
         sensor_datasets: dict[str, wds.WebDataset],
+        split: str,
+        temperature: float,
     ) -> wds.WebDataset:
-        """Create a mixed dataset from multiple sensor datasets."""
-        datasets_list = list(sensor_datasets.values())
-        # Round robin through sensors
+        """RandomMix at batch level. Homogeneous batches; probs pick the sensor."""
+        names = list(sensor_datasets)
         return wds.RandomMix(
-            datasets=datasets_list,
-            probs=None,  # Equal probability
+            datasets=list(sensor_datasets.values()),
+            probs=self._mix_probs(names, split, temperature),
             longest=True,
         )
 

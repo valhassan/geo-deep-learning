@@ -106,6 +106,16 @@ class TransformerWeightGenerator(nn.Module):
         return weights, bias
 
 
+def _pad_to_multiple(x: Tensor, multiple: int) -> Tensor:
+    h, w = x.shape[-2:]
+    pad_h = (multiple - h % multiple) % multiple
+    pad_w = (multiple - w % multiple) % multiple
+    if pad_h == 0 and pad_w == 0:
+        return x
+    top, left = pad_h // 2, pad_w // 2
+    return fn.pad(x, (left, pad_w - left, top, pad_h - top), mode="reflect")
+
+
 class DOFAv2Embedding(nn.Module):
     """Dynamic One-For-All v2 embedding layer."""
 
@@ -175,10 +185,9 @@ class DOFAv2Embedding(nn.Module):
             stride = 16
         else:
             stride = self.kernel_size
-        # Apply dynamic convolution
-        x = fn.conv2d(x, weights, bias=bias, stride=stride, padding=1, dilation=1)
-        # Flatten spatial dimensions
-        return x.flatten(2).transpose(1, 2)  # [B, L, D]
+        x = _pad_to_multiple(x, stride)
+        x = fn.conv2d(x, weights, bias=bias, stride=stride)
+        return x.flatten(2).transpose(1, 2)
 
 
 class DOFAv2(nn.Module):
@@ -217,10 +226,10 @@ class DOFAv2(nn.Module):
         self.depth = depth
         self.num_heads = num_heads
         self.mlp_ratio = mlp_ratio
-        effective_patch_size = 16 if convert_patch_to_16 else patch_size
-        self.num_patches = (img_size[0] // effective_patch_size) * (
-            img_size[1] // effective_patch_size
-        )
+        self.patch_stride = 16 if convert_patch_to_16 else patch_size
+        grid_h = (img_size[0] + self.patch_stride - 1) // self.patch_stride
+        grid_w = (img_size[1] + self.patch_stride - 1) // self.patch_stride
+        self.num_patches = grid_h * grid_w
         if out_indices is None:
             out_indices = [depth - 1]
         self.out_indices = out_indices
@@ -300,26 +309,25 @@ class DOFAv2(nn.Module):
             weights_only=True,
         )
         # Handle state dict format differences
-        if "model" in state_dict:
+        if "model" in state_dict and isinstance(state_dict["model"], dict):
             state_dict = state_dict["model"]
 
-        # Create mapping from old keys to new keys
-        new_state_dict = {}
-
+        new_state_dict: dict[str, Tensor] = {}
         for key, value in state_dict.items():
-            new_key = key
             if key.startswith("model."):
-                new_key = key[6:]
+                new_key = key.removeprefix("model.")
                 if new_key.startswith(("blocks.", "norm.")) or new_key in {
                     "cls_token",
                     "pos_embed",
                 }:
-                    pass
-                else:
-                    continue
+                    new_state_dict[new_key] = value
             elif key.startswith("patch_embed."):
-                new_key = key
-            new_state_dict[new_key] = value
+                new_state_dict[key] = value
+            elif key.startswith(("blocks.", "norm.")) or key in {
+                "cls_token",
+                "pos_embed",
+            }:
+                new_state_dict.setdefault(key, value)
         # Handle position embedding size mismatch
         if (
             "pos_embed" in new_state_dict
@@ -434,46 +442,28 @@ class DOFAv2(nn.Module):
 
     def forward_features(self, x: Tensor, wavelengths: Tensor) -> list[Tensor]:
         """Forward pass extracting features at specified layers."""
-        # Patch embedding
-        x = self.patch_embed(x, wavelengths)  # [B, L, D]
+        x = self.patch_embed(x, wavelengths)
         x = x + self.pos_embed[0, 1:]
-
-        # Prepend class token
         cls_tokens = self.cls_token.expand(x.shape[0], -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
-
-        # Apply position dropout
         x = self.pos_drop(x)
 
-        # Collect features
         features = []
-
-        # Apply transformer blocks
+        last = self.depth - 1
         for i, blk in enumerate(self.blocks):
             x = blk(x)
-            if i in self.out_indices:
-                # Extract spatial features (remove cls token)
-                feat = x[:, 1:, :]
-
-                # Reshape to spatial format
-                batch_size, length, channels = feat.shape
-                height = width = int(length**0.5)
-                feat = feat.reshape(batch_size, height, width, channels).permute(
-                    0,
-                    3,
-                    1,
-                    2,
-                )
-                features.append(feat)
-        # Apply final norm if last layer is requested
-        if (self.depth - 1) in self.out_indices and len(features) < len(
-            self.out_indices,
-        ):
-            x = self.norm(x)
-            feat = x[:, 1:, :]
+            if i not in self.out_indices:
+                continue
+            feat = self.norm(x) if i == last else x
+            feat = feat[:, 1:, :]
             batch_size, length, channels = feat.shape
             height = width = int(length**0.5)
-            feat = feat.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2)
+            feat = feat.reshape(batch_size, height, width, channels).permute(
+                0,
+                3,
+                1,
+                2,
+            )
             features.append(feat)
         return features
 
@@ -519,7 +509,7 @@ def create_dofa_base(
         embed_dim=768,
         num_heads=12,
         depth=12,
-        out_indices=out_indices or [4, 6, 10, 11],
+        out_indices=out_indices or [2, 5, 8, 11],
         pretrained=pretrained,
         **kwargs,
     )
@@ -552,7 +542,7 @@ def create_dofa_large(
         embed_dim=1024,
         num_heads=16,
         depth=24,
-        out_indices=out_indices or [5, 9, 15, 21],
+        out_indices=out_indices or [5, 11, 17, 23],
         pretrained=pretrained,
         **kwargs,
     )
