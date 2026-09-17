@@ -1,5 +1,6 @@
 """Segmentation DOFA model."""
 
+import json
 import logging
 import warnings
 from collections.abc import Callable
@@ -465,7 +466,11 @@ class _ExportWrapper(nn.Module):
         return self.model(x, wavelengths).out
 
 
-def export_model(checkpoint_path: str, output_path: str) -> None:
+def export_model(
+    checkpoint_path: str,
+    output_path: str,
+    metadata_path: str | None = None,
+) -> None:
     """Export DOFA: (x, mean, std, wavelengths) -> logits, single forward."""
     device = "cuda"
     model_class = SegmentationDOFA.load_from_checkpoint(
@@ -477,7 +482,7 @@ def export_model(checkpoint_path: str, output_path: str) -> None:
     model = model_class.model
     model.eval().cuda()
     wrapper = _ExportWrapper(model).cuda()
-    batch_size = int(404.5432096881631) # quirk of torch export for dynamic batch size
+    batch_size = int(404.5432096881631)  # quirk of torch export for dynamic batch size
     batch_dim = torch.export.Dim("batch", min=1, max=batch_size)
     channels_dim = torch.export.Dim("channels", min=1, max=8)
     c = 4
@@ -492,11 +497,16 @@ def export_model(checkpoint_path: str, output_path: str) -> None:
         "std": {0: channels_dim},
         "wavelengths": {0: channels_dim},
     }
+    extra = None
+    if metadata_path:
+        with Path(metadata_path).open("r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        extra = {"metadata.json": json.dumps(metadata)}
     exported = torch.export.export(
         wrapper,
         args=(x, mean, std, wavelengths),
         dynamic_shapes=dynamic_shapes,
         strict=False,
     )
-    torch.export.save(exported, output_path)
+    torch.export.save(exported, output_path, extra_files=extra)
     logger.info("Exported to %s", output_path)
