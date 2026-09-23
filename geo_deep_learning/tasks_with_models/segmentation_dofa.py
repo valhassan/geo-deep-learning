@@ -491,11 +491,12 @@ def export_model(
     model = model_class.model
     model.eval().cuda()
     wrapper = _ExportWrapper(model).cuda()
-    batch_size = int(404.5432096881631)  # quirk of torch export for dynamic batch size
-    batch_dim = torch.export.Dim("batch", min=1, max=batch_size)
+    example_batch = 2
+    batch_dim = torch.export.Dim("batch", min=1, max=32)
     channels_dim = torch.export.Dim("channels", min=1, max=8)
     c = 4
-    x = torch.randn(batch_size, c, 512, 512, device=device)
+    h, w = model_class.image_size
+    x = torch.randn(example_batch, c, h, w, device=device)
     mean = torch.randn(c, device=device)
     std = torch.randn(c, device=device).abs() + 1e-5
     wavelengths = torch.randn(c, device=device, dtype=torch.float32)
