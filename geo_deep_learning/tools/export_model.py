@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 EXPORTERS = {
     "dofa": "geo_deep_learning.tasks_with_models.segmentation_dofa",
+    "segformer": "geo_deep_learning.tasks_with_models.segmentation_segformer",
 }
 
 
