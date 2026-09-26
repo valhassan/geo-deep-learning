@@ -30,8 +30,9 @@ class Decoder(nn.Module):
         embedding_dim: int | None = None,
         num_classes: int = 1,
         dropout_ratio: float = 0.1,
+        skip_channels: int | None = None,
     ) -> None:
-        """Initialize the decoder."""
+        """Initialize the decoder. skip_channels adds a stride-2 map in front."""
         super().__init__()
         if feature_strides is None:
             feature_strides = [4, 8, 16, 32]
@@ -58,10 +59,15 @@ class Decoder(nn.Module):
         self.linear_c3 = MLP(input_dim=c3_in_channels, embed_dim=embedding_dim)
         self.linear_c2 = MLP(input_dim=c2_in_channels, embed_dim=embedding_dim)
         self.linear_c1 = MLP(input_dim=c1_in_channels, embed_dim=embedding_dim)
+        n_scales = 4
+        self.linear_c0: MLP | None = None
+        if skip_channels is not None:
+            self.linear_c0 = MLP(input_dim=skip_channels, embed_dim=embedding_dim)
+            n_scales = 5
 
         self.linear_fuse = nn.Sequential(
             nn.Conv2d(
-                in_channels=embedding_dim * 4,
+                in_channels=embedding_dim * n_scales,
                 out_channels=embedding_dim,
                 kernel_size=1,
                 bias=False,
@@ -73,57 +79,46 @@ class Decoder(nn.Module):
 
         self.linear_pred = nn.Conv2d(embedding_dim, self.num_classes, kernel_size=1)
 
-    def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
-        """Forward pass."""
-        c1, c2, c3, c4 = x
-        n, _, _, _ = c4.shape
-
-        _c4 = (
-            self.linear_c4(c4)
+    def _project(
+        self,
+        mlp: MLP,
+        feat: torch.Tensor,
+        target: tuple[int, int],
+    ) -> torch.Tensor:
+        n = feat.shape[0]
+        projected = (
+            mlp(feat)
             .permute(0, 2, 1)
-            .reshape(n, -1, c4.shape[2], c4.shape[3])
+            .reshape(n, -1, feat.shape[2], feat.shape[3])
             .contiguous()
         )
-        _c4 = fn.interpolate(
-            input=_c4,
-            size=c1.size()[2:],
+        if projected.shape[2:] == target:
+            return projected
+        return fn.interpolate(
+            projected,
+            size=target,
             mode="bilinear",
             align_corners=False,
         )
 
-        _c3 = (
-            self.linear_c3(c3)
-            .permute(0, 2, 1)
-            .reshape(n, -1, c3.shape[2], c3.shape[3])
-            .contiguous()
-        )
-        _c3 = fn.interpolate(
-            input=_c3,
-            size=c1.size()[2:],
-            mode="bilinear",
-            align_corners=False,
-        )
-
-        _c2 = (
-            self.linear_c2(c2)
-            .permute(0, 2, 1)
-            .reshape(n, -1, c2.shape[2], c2.shape[3])
-            .contiguous()
-        )
-        _c2 = fn.interpolate(
-            input=_c2,
-            size=c1.size()[2:],
-            mode="bilinear",
-            align_corners=False,
-        )
-
-        _c1 = (
-            self.linear_c1(c1)
-            .permute(0, 2, 1)
-            .reshape(n, -1, c1.shape[2], c1.shape[3])
-            .contiguous()
-        )
-        _c = self.linear_fuse(torch.cat([_c4, _c3, _c2, _c1], dim=1))
-        x = self.dropout(_c)
-        out = self.linear_pred(x)
-        return out, None
+    def forward(self, x: list[torch.Tensor]) -> tuple[torch.Tensor, None]:
+        """Forward pass. x is [c1..c4] or [skip, c1..c4], finest map first."""
+        mlps: list[MLP] = [
+            self.linear_c1,
+            self.linear_c2,
+            self.linear_c3,
+            self.linear_c4,
+        ]
+        if self.linear_c0 is not None:
+            mlps = [self.linear_c0, *mlps]
+        if len(x) != len(mlps):
+            msg = f"expected {len(mlps)} feature maps, got {len(x)}"
+            raise ValueError(msg)
+        target = x[0].shape[2:]
+        projs = [
+            self._project(mlp, feat, target)
+            for mlp, feat in zip(mlps, x, strict=True)
+        ]
+        fused = self.linear_fuse(torch.cat(projs[::-1], dim=1))
+        dropped = self.dropout(fused)
+        return self.linear_pred(dropped), None
