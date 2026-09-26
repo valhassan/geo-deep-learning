@@ -21,7 +21,7 @@ class RandomPlanckian(nn.Module):
         self,
         cct_range: tuple[float, float] = (3200.0, 10000.0),
         t_ref: float = 6500.0,
-        p: float = 0.5,
+        p: float = 0.1,
     ) -> None:
         """Initialize RandomPlanckian."""
         super().__init__()
