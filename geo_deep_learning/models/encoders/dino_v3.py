@@ -343,12 +343,20 @@ class DinoVisionTransformer(nn.Module):
         blocks_to_take = (
             range(total_block_len - n, total_block_len) if isinstance(n, int) else n
         )
+        # DoRA leaves a graph through every block. Checkpoint so attention
+        # maps are recomputed on backward instead of stored.
+        checkpoint_blocks = torch.is_grad_enabled() and any(
+            p.requires_grad for p in self.parameters()
+        )
         for i, blk in enumerate(self.blocks):
             if self.rope_embed is not None:
                 rope_sincos = self.rope_embed(height=h, width=w)
             else:
                 rope_sincos = None
-            x = blk(x, rope_sincos)
+            if checkpoint_blocks:
+                x = cp.checkpoint(blk, x, rope_sincos, use_reentrant=False)
+            else:
+                x = blk(x, rope_sincos)
             if i in blocks_to_take:
                 output.append(x)
         assert len(output) == len(blocks_to_take), (  # noqa: S101
