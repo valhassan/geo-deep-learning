@@ -32,26 +32,28 @@ def _sensor_wavelengths(wavelengths: Tensor, channels: int) -> Tensor:
 
 
 class WavelengthStem(nn.Module):
-    """DOFA kernel generator at MiT stage-1 stride, plus a stride-2 skip."""
+    """DOFA kernel generator at stride 4. The stride-2 skip is optional."""
 
-    def __init__(self, embed_dim: int) -> None:
-        """Initialize the stem. embed_dim is MiT stage-1 width (32 or 64)."""
+    def __init__(self, embed_dim: int, *, with_skip: bool = True) -> None:
+        """Initialize the stem. embed_dim is the stride-4 width."""
         super().__init__()
         self.embed_dim = embed_dim
         self.wave_dim = _WAVE_DIM
+        self.with_skip = with_skip
         self.fclayer = FCResLayer(_WAVE_DIM)
         self.stage_gen = TransformerWeightGenerator(
             input_dim=_WAVE_DIM,
             output_dim=_PATCH * _PATCH * embed_dim,
             embed_dim=embed_dim,
         )
-        self.skip_gen = TransformerWeightGenerator(
-            input_dim=_WAVE_DIM,
-            output_dim=_SKIP_KERNEL * _SKIP_KERNEL * embed_dim,
-            embed_dim=embed_dim,
-        )
         self.token_norm = nn.LayerNorm(embed_dim)
-        self.skip_norm = nn.LayerNorm(embed_dim)
+        if with_skip:
+            self.skip_gen = TransformerWeightGenerator(
+                input_dim=_WAVE_DIM,
+                output_dim=_SKIP_KERNEL * _SKIP_KERNEL * embed_dim,
+                embed_dim=embed_dim,
+            )
+            self.skip_norm = nn.LayerNorm(embed_dim)
         self._init_weights()
 
     def _init_weights(self) -> None:
@@ -91,18 +93,44 @@ class WavelengthStem(nn.Module):
     def _norm(feat: Tensor, norm: nn.LayerNorm) -> Tensor:
         return norm(feat.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
+    def _kernels(
+        self,
+        x: Tensor,
+        wavelengths: Tensor,
+        *,
+        skip: bool,
+    ) -> tuple[Tensor, Tensor, Tensor | None, Tensor | None]:
+        """Stage kernel, and the skip kernel when this stem has one."""
+        device_type = x.device.type
+        with torch.autocast(device_type=device_type, enabled=False):
+            waves = self._encode(wavelengths, x.shape[1])
+            stage_w, stage_b = self.stage_gen(waves)
+            if not skip:
+                return stage_w, stage_b, None, None
+            skip_w, skip_b = self.skip_gen(waves)
+            return stage_w, stage_b, skip_w, skip_b
+
+    def feature_map(self, x: Tensor, wavelengths: Tensor) -> Tensor:
+        """Stride-4 map (B, embed_dim, H/4, W/4). Does not build the skip."""
+        stage_w, stage_b, _, _ = self._kernels(x, wavelengths, skip=False)
+        return self._norm(
+            self._conv(x, stage_w, stage_b, _PATCH, _STRIDE),
+            self.token_norm,
+        )
+
     def forward(
         self,
         x: Tensor,
         wavelengths: Tensor,
     ) -> tuple[Tensor, int, int, Tensor]:
         """Return stage-1 tokens (B, L, E), height, width, and the stride-2 skip."""
-        device_type = x.device.type
-        with torch.autocast(device_type=device_type, enabled=False):
-            waves = self._encode(wavelengths, x.shape[1])
-            stage_w, stage_b = self.stage_gen(waves)
-            skip_w, skip_b = self.skip_gen(waves)
-
+        if not self.with_skip:
+            msg = "WavelengthStem was built without a skip"
+            raise RuntimeError(msg)
+        stage_w, stage_b, skip_w, skip_b = self._kernels(x, wavelengths, skip=True)
+        if skip_w is None or skip_b is None:
+            msg = "WavelengthStem was built without a skip"
+            raise RuntimeError(msg)
         feat = self._norm(
             self._conv(x, stage_w, stage_b, _PATCH, _STRIDE),
             self.token_norm,
