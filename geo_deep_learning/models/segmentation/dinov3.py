@@ -84,6 +84,3 @@ if __name__ == "__main__":
     sensor_mean = torch.tensor([0.29, 0.27, 0.22, 0.35]).view(4, 1, 1)
     sensor_std = torch.tensor([0.15, 0.14, 0.13, 0.16]).view(4, 1, 1)
     output = model(x, wavelengths, sensor_mean, sensor_std)
-    # print(output.keys())
-    # print(f"pred_logits shape: {output['pred_logits'].shape}")
-    # print(f"pred_masks shape: {output['pred_masks'].shape}")
