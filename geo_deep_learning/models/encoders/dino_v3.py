@@ -348,11 +348,10 @@ class DinoVisionTransformer(nn.Module):
         checkpoint_blocks = torch.is_grad_enabled() and any(
             p.requires_grad for p in self.parameters()
         )
+        rope_sincos = (
+            self.rope_embed(height=h, width=w) if self.rope_embed is not None else None
+        )
         for i, blk in enumerate(self.blocks):
-            if self.rope_embed is not None:
-                rope_sincos = self.rope_embed(height=h, width=w)
-            else:
-                rope_sincos = None
             if checkpoint_blocks:
                 x = cp.checkpoint(blk, x, rope_sincos, use_reentrant=False)
             else:
@@ -928,6 +927,8 @@ class DINOv3Adapter(nn.Module):
         self.backbone = backbone
         # Important: we freeze the backbone
         self.backbone.requires_grad_(requires_grad=False)
+        # Pretraining aug. Off so train matches eval.
+        self.backbone.rope_embed.rescale_coords = None
 
         self.pretrain_size = (pretrain_size, pretrain_size)
         self.interaction_indexes = interaction_indexes
