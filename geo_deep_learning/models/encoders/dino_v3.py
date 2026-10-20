@@ -224,7 +224,6 @@ class DinoVisionTransformer(nn.Module):
     ) -> None:
         """Inject DoRA wrappers into the QKV layers."""
         for block in self.blocks:
-            # Wrap the existing qkv layer
             block.attn.qkv = DoRAQKVWrapper(
                 qkv=block.attn.qkv,
                 r=r,
@@ -497,24 +496,10 @@ def get_reference_points(spatial_shapes: Tensor, device: str | torch.device) -> 
     return reference_points[:, :, None]
 
 
-def deform_inputs(x: Tensor, patch_size: int) -> tuple[Tensor, Tensor]:
-    """Deform inputs."""
+def deform_inputs(x: Tensor, patch_size: int) -> list[Tensor]:
+    """SPM queries over the ViT grid. Reference points sit on the pyramid."""
     _, _, h, w = x.shape
     spatial_shapes = torch.as_tensor(
-        [(h // 8, w // 8), (h // 16, w // 16), (h // 32, w // 32)],
-        dtype=torch.long,
-        device=x.device,
-    )
-    level_start_index = torch.cat(
-        (spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]),
-    )
-    reference_points = get_reference_points(
-        [(h // patch_size, w // patch_size)],
-        x.device,
-    )
-    deform_inputs1 = [reference_points, spatial_shapes, level_start_index]
-
-    spatial_shapes = torch.as_tensor(
         [(h // patch_size, w // patch_size)],
         dtype=torch.long,
         device=x.device,
@@ -526,9 +511,7 @@ def deform_inputs(x: Tensor, patch_size: int) -> tuple[Tensor, Tensor]:
         [(h // 8, w // 8), (h // 16, w // 16), (h // 32, w // 32)],
         x.device,
     )
-    deform_inputs2 = [reference_points, spatial_shapes, level_start_index]
-
-    return deform_inputs1, deform_inputs2
+    return [reference_points, spatial_shapes, level_start_index]
 
 
 class ConvFFN(nn.Module):
@@ -586,7 +569,7 @@ class DWConv(nn.Module):
 class Extractor(nn.Module):
     """Extractor."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         dim: int,
         num_heads: int = 6,
@@ -622,7 +605,7 @@ class Extractor(nn.Module):
             self.ffn_norm = norm_layer(dim)
             self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
-    def forward(  # noqa: PLR0913
+    def forward(  # noqa: PLR0913, PLR0917
         self,
         query: Tensor,
         reference_points: Tensor,
@@ -660,7 +643,7 @@ class Extractor(nn.Module):
 class InteractionBlockWithCls(nn.Module):
     """InteractionBlockWithCls."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         dim: int,
         num_heads: int = 6,
@@ -711,13 +694,12 @@ class InteractionBlockWithCls(nn.Module):
         else:
             self.extra_extractors = None
 
-    def forward(  # noqa: PLR0913
+    def forward(  # noqa: PLR0913, PLR0917
         self,
         x: Tensor,
         c: Tensor,
         cls: Tensor,
-        deform_inputs1: Tensor,  # noqa: ARG002
-        deform_inputs2: Tensor,
+        deform_inputs: list[Tensor],
         h_c: int,
         w_c: int,
         h_toks: int,  # noqa: ARG002
@@ -726,10 +708,10 @@ class InteractionBlockWithCls(nn.Module):
         """Forward pass."""
         c = self.extractor(
             query=c,
-            reference_points=deform_inputs2[0],
+            reference_points=deform_inputs[0],
             feat=x,
-            spatial_shapes=deform_inputs2[1],
-            level_start_index=deform_inputs2[2],
+            spatial_shapes=deform_inputs[1],
+            level_start_index=deform_inputs[2],
             h=h_c,
             w=w_c,
         )
@@ -737,10 +719,10 @@ class InteractionBlockWithCls(nn.Module):
             for extractor in self.extra_extractors:
                 c = extractor(
                     query=c,
-                    reference_points=deform_inputs2[0],
+                    reference_points=deform_inputs[0],
                     feat=x,
-                    spatial_shapes=deform_inputs2[1],
-                    level_start_index=deform_inputs2[2],
+                    spatial_shapes=deform_inputs[1],
+                    level_start_index=deform_inputs[2],
                     h=h_c,
                     w=w_c,
                 )
@@ -888,7 +870,6 @@ class SpatialPriorModule(nn.Module):
             c4 = self.fc4(c4)
 
             bs, dim, _, _ = c1.shape
-            # c1 = c1.view(bs, dim, -1).transpose(1, 2)  # 4s
             c2 = c2.view(bs, dim, -1).transpose(1, 2)  # 8s
             c3 = c3.view(bs, dim, -1).transpose(1, 2)  # 16s
             c4 = c4.view(bs, dim, -1).transpose(1, 2)  # 32s
@@ -905,7 +886,7 @@ class SpatialPriorModule(nn.Module):
 class DINOv3Adapter(nn.Module):
     """DINOv3 Multi-Scale Adapter."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         backbone: nn.Module,
         interaction_indexes: list[int] = [4, 11, 17, 23],  # noqa: B006
@@ -935,9 +916,6 @@ class DINOv3Adapter(nn.Module):
         self.add_vit_feature = add_vit_feature
         embed_dim = self.backbone.embed_dim
         self.patch_size = self.backbone.patch_size
-        # print("embed dim", embed_dim)
-        # print("interaction_indexes", self.interaction_indexes)
-        # print("patch_size", self.patch_size)
 
         block_fn = InteractionBlockWithCls
         self.level_embed = nn.Parameter(torch.zeros(3, embed_dim))
@@ -1036,9 +1014,8 @@ class DINOv3Adapter(nn.Module):
         wavelengths: Tensor,
     ) -> dict[str, Tensor]:
         """SPM sees x. ViT sees rgb."""
-        deform_inputs1, deform_inputs2 = deform_inputs(x, self.patch_size)
+        deform = deform_inputs(x, self.patch_size)
 
-        # SPM forward
         c1, c2, c3, c4 = self.spm(x, wavelengths)
         c2, c3, c4 = self._add_level_embed(c2, c3, c4)
 
@@ -1070,8 +1047,7 @@ class DINOv3Adapter(nn.Module):
                 x,
                 c,
                 cls,
-                deform_inputs1,
-                deform_inputs2,
+                deform,
                 h_c,
                 w_c,
                 h_toks,
@@ -1079,7 +1055,6 @@ class DINOv3Adapter(nn.Module):
             )
             outs.append(x.transpose(1, 2).view(bs, dim, h_toks, w_toks).contiguous())
 
-        # Split & Reshape
         c2 = c[:, 0 : c2.size(1), :]
         c3 = c[:, c2.size(1) : c2.size(1) + c3.size(1), :]
         c4 = c[:, c2.size(1) + c3.size(1) :, :]
@@ -1104,12 +1079,13 @@ class DINOv3Adapter(nn.Module):
                 mode="bilinear",
                 align_corners=False,
             )
-            x3 = fn.interpolate(
-                x3,
-                size=(1 * h_c, 1 * w_c),
-                mode="bilinear",
-                align_corners=False,
-            )
+            if x3.shape[-2:] != (h_c, w_c):
+                x3 = fn.interpolate(
+                    x3,
+                    size=(h_c, w_c),
+                    mode="bilinear",
+                    align_corners=False,
+                )
             x4 = fn.interpolate(
                 x4,
                 size=(h_c // 2, w_c // 2),
@@ -1118,26 +1094,9 @@ class DINOv3Adapter(nn.Module):
             )
             c1, c2, c3, c4 = c1 + x1, c2 + x2, c3 + x3, c4 + x4
 
-        # Final Norm
         f1 = self.norm1(c1)
         f2 = self.norm2(c2)
         f3 = self.norm3(c3)
         f4 = self.norm4(c4)
 
         return {"1": f1, "2": f2, "3": f3, "4": f4}
-
-
-# if __name__ == "__main__":
-# backbone = vit_large()
-# model = DINOv3Adapter(backbone=backbone)
-# model = vit_large()
-# model.init_weights()
-# weights = ""
-# state_dict = torch.load(weights, weights_only=True)
-# # print(state_dict.keys())
-# # print(model.state_dict().keys())
-# model.load_state_dict(state_dict, strict=True)
-# image = torch.randn(1, 3, 224, 224)
-# output = model(image)
-# for key, value in output.items():
-#     print(key, value.shape)
