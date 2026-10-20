@@ -569,7 +569,7 @@ class DWConv(nn.Module):
 class Extractor(nn.Module):
     """Extractor."""
 
-    def __init__(  # noqa: PLR0913, PLR0917
+    def __init__(  # noqa: PLR0913
         self,
         dim: int,
         num_heads: int = 6,
@@ -605,7 +605,7 @@ class Extractor(nn.Module):
             self.ffn_norm = norm_layer(dim)
             self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
-    def forward(  # noqa: PLR0913, PLR0917
+    def forward(  # noqa: PLR0913
         self,
         query: Tensor,
         reference_points: Tensor,
@@ -643,7 +643,7 @@ class Extractor(nn.Module):
 class InteractionBlockWithCls(nn.Module):
     """InteractionBlockWithCls."""
 
-    def __init__(  # noqa: PLR0913, PLR0917
+    def __init__(  # noqa: PLR0913
         self,
         dim: int,
         num_heads: int = 6,
@@ -694,7 +694,7 @@ class InteractionBlockWithCls(nn.Module):
         else:
             self.extra_extractors = None
 
-    def forward(  # noqa: PLR0913, PLR0917
+    def forward(  # noqa: PLR0913
         self,
         x: Tensor,
         c: Tensor,
@@ -886,7 +886,7 @@ class SpatialPriorModule(nn.Module):
 class DINOv3Adapter(nn.Module):
     """DINOv3 Multi-Scale Adapter."""
 
-    def __init__(  # noqa: PLR0913, PLR0917
+    def __init__(  # noqa: PLR0913
         self,
         backbone: nn.Module,
         interaction_indexes: list[int] = [4, 11, 17, 23],  # noqa: B006
