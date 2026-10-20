@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from typing import TYPE_CHECKING, override
 
 import torch
 import torch.nn.functional as fn
 from torch import nn
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class DoRAQKVWrapper(nn.Module):
@@ -67,12 +70,14 @@ class DoRAQKVWrapper(nn.Module):
             )
         self._merged_weight = None
 
+    @override
     def train(self, mode: bool = True) -> DoRAQKVWrapper:
         """Drop the inference weight when training resumes."""
         if mode:
             self._merged_weight = None
         return super().train(mode)
 
+    @override
     def _apply(
         self,
         func: Callable[[torch.Tensor], torch.Tensor],
@@ -85,7 +90,7 @@ class DoRAQKVWrapper(nn.Module):
     @staticmethod
     def _clear_merged_on_load(module: nn.Module, incompatible_keys: object) -> None:
         del incompatible_keys
-        module._merged_weight = None
+        module._merged_weight = None  # noqa: SLF001
 
     def _get_dora_weight(
         self,
