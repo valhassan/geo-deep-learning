@@ -444,11 +444,12 @@ def vit_large(
         model_url = "dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth"
         hub_dir = torch.hub.get_dir()
         ckpt_path = Path(hub_dir) / "checkpoints" / model_url
-        if ckpt_path.exists():
+        if ckpt_path.is_file():
             model.load_state_dict(torch.load(ckpt_path, weights_only=True))
             logger.info("Loaded pretrained weights %s", model_url)
         else:
-            logger.warning("Pretrained weights %s not found", model_url)
+            msg = f"pretrained weights not found: {ckpt_path}"
+            raise FileNotFoundError(msg)
 
     return model
 
@@ -569,7 +570,7 @@ class DWConv(nn.Module):
 class Extractor(nn.Module):
     """Extractor."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         dim: int,
         num_heads: int = 6,
@@ -605,7 +606,7 @@ class Extractor(nn.Module):
             self.ffn_norm = norm_layer(dim)
             self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
-    def forward(  # noqa: PLR0913
+    def forward(  # noqa: PLR0913, PLR0917
         self,
         query: Tensor,
         reference_points: Tensor,
@@ -643,7 +644,7 @@ class Extractor(nn.Module):
 class InteractionBlockWithCls(nn.Module):
     """InteractionBlockWithCls."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         dim: int,
         num_heads: int = 6,
@@ -694,7 +695,7 @@ class InteractionBlockWithCls(nn.Module):
         else:
             self.extra_extractors = None
 
-    def forward(  # noqa: PLR0913
+    def forward(  # noqa: PLR0913, PLR0917
         self,
         x: Tensor,
         c: Tensor,
@@ -886,7 +887,7 @@ class SpatialPriorModule(nn.Module):
 class DINOv3Adapter(nn.Module):
     """DINOv3 Multi-Scale Adapter."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         backbone: nn.Module,
         interaction_indexes: list[int] = [4, 11, 17, 23],  # noqa: B006
