@@ -1,10 +1,15 @@
 """DINOv3 segmentation model."""
 
 import torch
+import torch.nn.functional as fn
 from torch import Tensor, nn
 
-from geo_deep_learning.models.decoders.mask2former.mask2former import Mask2FormerHead
+from geo_deep_learning.models.decoders.upernet import UperNetDecoder
 from geo_deep_learning.models.encoders.dino_v3 import DINOv3Adapter, vit_large
+from geo_deep_learning.models.heads.segmentation_head import (
+    SegmentationHead,
+    SegmentationOutput,
+)
 
 # SAT-493M. https://github.com/facebookresearch/dinov3
 _SAT_MEAN = (0.430, 0.411, 0.296)
@@ -20,43 +25,26 @@ class DINOv3SegmentationModel(nn.Module):
         backbone = vit_large()
         if use_dora:
             backbone.inject_dora()
-        self.encoder = DINOv3Adapter(
-            backbone=backbone,
-        )
+        self.encoder = DINOv3Adapter(backbone=backbone)
         embed_dim = self.encoder.backbone.embed_dim
-        patch_size = self.encoder.backbone.patch_size
-        self.decoder = Mask2FormerHead(
-            input_shape={
-                "1": [embed_dim, patch_size * 4, patch_size * 4, 4],
-                "2": [embed_dim, patch_size * 2, patch_size * 2, 4],
-                "3": [embed_dim, patch_size, patch_size, 4],
-                "4": [embed_dim, int(patch_size / 2), int(patch_size / 2), 4],
-            },
-            num_classes=num_classes,
+        self.decoder = UperNetDecoder(
+            embed_dim=[embed_dim] * 4,
+            channels=256,
+            align_corners=False,
+            scale_modules=False,
+            norm="gn",
         )
+        self.head = SegmentationHead(in_channels=256, num_classes=num_classes)
         self.register_buffer("sat_mean", torch.tensor(_SAT_MEAN).view(1, 3, 1, 1))
         self.register_buffer("sat_std", torch.tensor(_SAT_STD).view(1, 3, 1, 1))
         self._manage_gradients(use_dora=use_dora)
 
     def _manage_gradients(self, *, use_dora: bool = False) -> None:
-        """Freeze the backbone. Train the adapter, decoder, and DoRA."""
-        for param in self.parameters():
-            param.requires_grad = False
-
-        for name, module in self.encoder.named_children():
-            if name == "backbone":
-                continue
-            for param in module.parameters():
-                param.requires_grad = True
-        self.encoder.level_embed.requires_grad = True
-
-        if use_dora:
-            for name, param in self.encoder.backbone.named_parameters():
-                if "lora_" in name or "mag_" in name:
-                    param.requires_grad = True
-
-        for param in self.decoder.parameters():
-            param.requires_grad = True
+        """Freeze the backbone. Train the adapter, decoder, head, and DoRA."""
+        for name, param in self.named_parameters():
+            on_backbone = name.startswith("encoder.backbone.")
+            dora = "lora_" in name or "mag_" in name
+            param.requires_grad = (not on_backbone) or (use_dora and dora)
 
     def forward(
         self,
@@ -64,8 +52,11 @@ class DINOv3SegmentationModel(nn.Module):
         wavelengths: Tensor,
         sensor_mean: Tensor,
         sensor_std: Tensor,
-    ) -> Tensor:
+    ) -> SegmentationOutput:
         """X is 0-1. Stem uses sensor stats; ViT RGB uses the SAT buffers."""
+        if x.shape[-2] % 32 or x.shape[-1] % 32:
+            msg = f"H and W must be multiples of 32, got {tuple(x.shape[-2:])}"
+            raise ValueError(msg)
         mean = sensor_mean.to(dtype=torch.float32, device=x.device)
         std = sensor_std.to(dtype=torch.float32, device=x.device)
         if mean.dim() == 1:
@@ -74,7 +65,15 @@ class DINOv3SegmentationModel(nn.Module):
         x = x.float()
         stem = (x - mean) / std
         rgb = (x[:, :3] - self.sat_mean) / self.sat_std
-        return self.decoder(self.encoder(stem, rgb, wavelengths))
+        feats = self.encoder(stem, rgb, wavelengths)
+        logits = self.head(self.decoder([feats[k] for k in "1234"]))
+        logits = fn.interpolate(
+            logits,
+            size=x.shape[-2:],
+            mode="bilinear",
+            align_corners=False,
+        )
+        return SegmentationOutput(out=logits)
 
 
 if __name__ == "__main__":
