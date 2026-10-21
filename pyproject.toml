@@ -74,6 +74,7 @@ target-version = "py312"
 # Enable full PEP 8 + modern checks
 select = ["ALL"]
 ignore = [
+    "CPY001", # ignore copyright header
     "D203",  # conflicting docstring rules
     "D212",  # same, docstring starts on wrong line
     "ANN101", "ANN102",  # allow skipping `self`, `cls` annotations
