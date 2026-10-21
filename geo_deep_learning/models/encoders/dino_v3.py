@@ -488,6 +488,7 @@ def get_reference_points(spatial_shapes: Tensor, device: str | torch.device) -> 
         ref_y, ref_x = torch.meshgrid(
             torch.linspace(0.5, h_ - 0.5, h_, dtype=torch.float32, device=device),
             torch.linspace(0.5, w_ - 0.5, w_, dtype=torch.float32, device=device),
+            indexing="ij",
         )
         ref_y = ref_y.reshape(-1)[None] / h_
         ref_x = ref_x.reshape(-1)[None] / w_
