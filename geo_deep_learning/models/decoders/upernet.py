@@ -9,7 +9,7 @@ from geo_deep_learning.models.utils import PPM, ConvModule
 class UperNetDecoder(nn.Module):
     """UperNetDecoder. Adapted from MMSegmentation."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         embed_dim: list[int],
         pool_scales: tuple[int] = (1, 2, 3, 6),
@@ -17,6 +17,7 @@ class UperNetDecoder(nn.Module):
         *,
         align_corners: bool = True,
         scale_modules: bool = False,
+        norm: str = "bn",
     ) -> None:
         """
         Initialize the UPerNet decoder.
@@ -30,6 +31,7 @@ class UperNetDecoder(nn.Module):
                 rescaling. Defaults to True.
             scale_modules: Whether to apply scale modules to the inputs.
                 Required for plain ViT encoders. Defaults to False.
+            norm: ``bn`` or ``gn``. Defaults to BatchNorm so DOFA checkpoints load.
 
         """
         super().__init__()
@@ -64,6 +66,7 @@ class UperNetDecoder(nn.Module):
             self.embed_dim[-1],
             self.channels,
             align_corners=self.align_corners,
+            norm=norm,
         )
         self.bottleneck = ConvModule(
             self.embed_dim[-1] + len(pool_scales) * self.channels,
@@ -71,6 +74,7 @@ class UperNetDecoder(nn.Module):
             3,
             padding=1,
             inplace=True,
+            norm=norm,
         )
         # FPN Module
         self.lateral_convs = nn.ModuleList()
@@ -81,6 +85,7 @@ class UperNetDecoder(nn.Module):
                 self.channels,
                 1,
                 inplace=False,
+                norm=norm,
             )
             fpn_conv = ConvModule(
                 self.channels,
@@ -88,6 +93,7 @@ class UperNetDecoder(nn.Module):
                 3,
                 padding=1,
                 inplace=False,
+                norm=norm,
             )
             self.lateral_convs.append(l_conv)
             self.fpn_convs.append(fpn_conv)
@@ -98,6 +104,7 @@ class UperNetDecoder(nn.Module):
             3,
             padding=1,
             inplace=True,
+            norm=norm,
         )
 
     def psp_forward(self, inputs: list[torch.Tensor]) -> torch.Tensor:
