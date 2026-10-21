@@ -1,23 +1,42 @@
 """Utility functions for models."""
 
-import warnings  # noqa: I001
+import logging
 import math
-import torch
+import warnings
 
-# import torch before MultiScaleDeformableAttention
-import MultiScaleDeformableAttention as msda  # noqa: N813
+import torch
 import torch.nn.functional as fn
 from torch import nn
-from torch.cuda.amp import custom_bwd, custom_fwd
+from torch.amp import custom_bwd, custom_fwd
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 from torch.nn.init import constant_, xavier_uniform_
+
+try:
+    import MultiScaleDeformableAttention as msda  # noqa: N813
+except ImportError:
+    msda = None
+
+logger = logging.getLogger(__name__)
+_logged_msda: set[str] = set()
+
+
+def _norm2d(kind: str, channels: int) -> nn.Module:
+    if kind == "bn":
+        return nn.BatchNorm2d(channels)
+    if kind == "gn":
+        groups = min(32, channels)
+        while channels % groups != 0:
+            groups //= 2
+        return nn.GroupNorm(groups, channels)
+    msg = f"unknown norm '{kind}'"
+    raise ValueError(msg)
 
 
 class ConvModule(nn.Module):
     """Convolution module."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         in_channels: int,
         out_channels: int,
@@ -29,6 +48,7 @@ class ConvModule(nn.Module):
         inplace: bool = False,
         transpose: bool = False,
         scale_factor: int | None = None,
+        norm: str = "bn",
     ) -> None:
         """Initialize the convolution module."""
         super().__init__()
@@ -51,7 +71,7 @@ class ConvModule(nn.Module):
             stride=stride,
             bias=False,
         )
-        self.norm = nn.BatchNorm2d(out_channels)
+        self.norm = _norm2d(norm, out_channels)
         self.act = nn.ReLU(inplace=inplace)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -69,6 +89,7 @@ class PPM(nn.ModuleList):
         channels: int,
         *,
         align_corners: bool,
+        norm: str = "bn",
     ) -> None:
         """Initialize the Pooling Pyramid Module."""
         super().__init__()
@@ -81,7 +102,13 @@ class PPM(nn.ModuleList):
             self.append(
                 nn.Sequential(
                     nn.AdaptiveAvgPool2d(pool_scale),
-                    ConvModule(self.in_channels, self.channels, 1, inplace=True),
+                    ConvModule(
+                        self.in_channels,
+                        self.channels,
+                        1,
+                        inplace=True,
+                        norm=norm,
+                    ),
                 ),
             )
 
@@ -200,8 +227,8 @@ class MSDeformAttnFunction(Function):
     """Multi-Scale Deformable Attention Function."""
 
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float32)
-    def forward(  # noqa: PLR0913
+    @custom_fwd(device_type="cuda", cast_inputs=torch.float32)
+    def forward(  # noqa: PLR0913, PLR0917
         ctx: object,
         value: torch.Tensor,
         value_spatial_shapes: torch.Tensor,
@@ -239,7 +266,7 @@ class MSDeformAttnFunction(Function):
         return output
 
     @staticmethod
-    @custom_bwd
+    @custom_bwd(device_type="cuda")
     @once_differentiable
     def backward(
         ctx: object,
@@ -275,7 +302,7 @@ def ms_deform_attn_core_pytorch(
     """Multi-Scale Deformable Attention Core PyTorch."""
     # for debug and test only,
     # need to use cuda version instead
-    n_, s_, m_, d_ = value.shape
+    n_, _, m_, d_ = value.shape
     _, lq_, m_, l_, p_, _ = sampling_locations.shape
     value_list = value.split([h_ * w_ for h_, w_ in value_spatial_shapes], dim=1)
     sampling_grids = 2 * sampling_locations - 1
@@ -383,7 +410,7 @@ class MSDeformAttn(nn.Module):
         xavier_uniform_(self.output_proj.weight.data)
         constant_(self.output_proj.bias.data, 0.0)
 
-    def forward(  # noqa: PLR0913
+    def forward(  # noqa: PLR0913, PLR0917
         self,
         query: torch.Tensor,
         reference_points: torch.Tensor,
@@ -452,12 +479,25 @@ class MSDeformAttn(nn.Module):
                 f"but get {reference_points.shape[-1]} instead."
             )
             raise ValueError(err_msg)
-        output = MSDeformAttnFunction.apply(
-            value,
-            input_spatial_shapes,
-            input_level_start_index,
-            sampling_locations,
-            attention_weights,
-            self.im2col_step,
-        )
+        cuda = msda is not None and value.device.type == "cuda"
+        if not _logged_msda:
+            path = "cuda" if cuda else "pytorch"
+            _logged_msda.add(path)
+            logger.info("MSDeformAttn path: %s", path)
+        if not cuda:
+            output = ms_deform_attn_core_pytorch(
+                value,
+                input_spatial_shapes,
+                sampling_locations,
+                attention_weights,
+            )
+        else:
+            output = MSDeformAttnFunction.apply(
+                value,
+                input_spatial_shapes,
+                input_level_start_index,
+                sampling_locations,
+                attention_weights,
+                self.im2col_step,
+            )
         return self.output_proj(output)
