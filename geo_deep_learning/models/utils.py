@@ -479,12 +479,17 @@ class MSDeformAttn(nn.Module):
                 f"but get {reference_points.shape[-1]} instead."
             )
             raise ValueError(err_msg)
-        cuda = msda is not None and value.device.type == "cuda"
-        if not _logged_msda:
-            path = "cuda" if cuda else "pytorch"
+        use_cuda_op = msda is not None and value.is_cuda
+        if value.is_cuda and msda is None and "slow" not in _logged_msda:
+            _logged_msda.add("slow")
+            logger.warning(
+                "MSDeformAttn CUDA op is not installed; using the PyTorch path on GPU",
+            )
+        elif not _logged_msda:
+            path = "cuda" if use_cuda_op else "pytorch"
             _logged_msda.add(path)
             logger.info("MSDeformAttn path: %s", path)
-        if not cuda:
+        if not use_cuda_op:
             output = ms_deform_attn_core_pytorch(
                 value,
                 input_spatial_shapes,
