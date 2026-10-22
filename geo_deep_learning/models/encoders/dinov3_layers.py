@@ -660,11 +660,10 @@ class SelfAttentionBlock(nn.Module):
         # This is the reference implementation for a single tensor,
         # matching what is done below for a list.
         # We call the list op on [x] instead of this function.
-        b, _, _ = x.shape
-        sample_subset_size = max(int(b * (1 - self.sample_drop_ratio)), 1)
-        residual_scale_factor = b / sample_subset_size
-
         if self.training and self.sample_drop_ratio > 0.0:
+            b = x.shape[0]
+            sample_subset_size = max(int(b * (1 - self.sample_drop_ratio)), 1)
+            residual_scale_factor = b / sample_subset_size
             indices_1 = (torch.randperm(b, device=x.device))[:sample_subset_size]
 
             x_subset_1 = x[indices_1]
@@ -706,16 +705,19 @@ class SelfAttentionBlock(nn.Module):
         # This list operator concatenates the tokens from the list of inputs together
         # to save on the elementwise operations.
         # Torch-compile memory-planning allows hiding the overhead related to concat ops
-        b_list = [x.shape[0] for x in x_list]
-        sample_subset_sizes = [
-            max(int(b * (1 - self.sample_drop_ratio)), 1) for b in b_list
-        ]
-        residual_scale_factors = [
-            b / sample_subset_size
-            for b, sample_subset_size in zip(b_list, sample_subset_sizes, strict=False)
-        ]
-
         if self.training and self.sample_drop_ratio > 0.0:
+            b_list = [x.shape[0] for x in x_list]
+            sample_subset_sizes = [
+                max(int(b * (1 - self.sample_drop_ratio)), 1) for b in b_list
+            ]
+            residual_scale_factors = [
+                b / sample_subset_size
+                for b, sample_subset_size in zip(
+                    b_list,
+                    sample_subset_sizes,
+                    strict=False,
+                )
+            ]
             indices_1_list = [
                 (torch.randperm(b, device=x.device))[:sample_subset_size]
                 for x, b, sample_subset_size in zip(
