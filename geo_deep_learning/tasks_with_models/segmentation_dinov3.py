@@ -60,6 +60,7 @@ class SegmentationDINOv3(LightningModule):
         max_samples: int,
         loss: Callable,
         use_dora: bool = False,
+        pretrained: bool = True,
         optimizer: OptimizerCallable = torch.optim.Adam,
         scheduler: LRSchedulerCallable = torch.optim.lr_scheduler.ConstantLR,
         scheduler_config: dict[str, Any] | None = None,
@@ -75,6 +76,7 @@ class SegmentationDINOv3(LightningModule):
         self.weights_from_checkpoint_path = weights_from_checkpoint_path
         self.load_parts = load_parts
         self.use_dora = use_dora
+        self.pretrained = pretrained
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.scheduler_config = scheduler_config or {"interval": "epoch"}
@@ -119,6 +121,7 @@ class SegmentationDINOv3(LightningModule):
         self.model = DINOv3SegmentationModel(
             num_classes=self.num_classes,
             use_dora=self.use_dora,
+            pretrained=self.pretrained,
         )
         if self.weights_from_checkpoint_path:
             logger.info(
@@ -430,11 +433,12 @@ def export_model(
         map_location=device,
         strict=False,
         weights_from_checkpoint_path=None,
+        pretrained=False,
     )
     model = task.model.eval().cuda()
     wrapper = _ExportWrapper(model).cuda()
     batch_dim = torch.export.Dim("batch", min=1, max=32)
-    channels_dim = torch.export.Dim("channels", min=1, max=8)
+    channels_dim = torch.export.Dim("channels", min=3, max=8)
     channels = 4
     height, width = task.image_size
     x = torch.randn(2, channels, height, width, device=device)
