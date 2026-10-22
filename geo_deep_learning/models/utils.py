@@ -422,7 +422,9 @@ class MSDeformAttn(nn.Module):
         """Forward function."""
         n, len_q, _ = query.shape
         n, len_in, _ = input_flatten.shape
-        assert (input_spatial_shapes[:, 0] * input_spatial_shapes[:, 1]).sum() == len_in  # noqa: S101
+        if not torch.compiler.is_compiling():
+            spatial = input_spatial_shapes[:, 0] * input_spatial_shapes[:, 1]
+            assert spatial.sum() == len_in  # noqa: S101
 
         value = self.value_proj(input_flatten)
         if input_padding_mask is not None:
@@ -479,7 +481,9 @@ class MSDeformAttn(nn.Module):
                 f"but get {reference_points.shape[-1]} instead."
             )
             raise ValueError(err_msg)
-        use_cuda_op = msda is not None and value.is_cuda
+        use_cuda_op = (
+            msda is not None and value.is_cuda and not torch.compiler.is_exporting()
+        )
         if value.is_cuda and msda is None and "slow" not in _logged_msda:
             _logged_msda.add("slow")
             logger.warning(
