@@ -19,10 +19,16 @@ _SAT_STD = (0.213, 0.156, 0.143)
 class DINOv3SegmentationModel(nn.Module):
     """DINOv3 segmentation model."""
 
-    def __init__(self, num_classes: int = 1, *, use_dora: bool = False) -> None:
+    def __init__(
+        self,
+        num_classes: int = 1,
+        *,
+        use_dora: bool = False,
+        pretrained: bool = True,
+    ) -> None:
         """Initialize DINOv3 segmentation model."""
         super().__init__()
-        backbone = vit_large()
+        backbone = vit_large(pretrained=pretrained)
         if use_dora:
             backbone.inject_dora()
         self.encoder = DINOv3Adapter(backbone=backbone)
@@ -64,7 +70,8 @@ class DINOv3SegmentationModel(nn.Module):
             std = std.view(1, -1, 1, 1)
         x = x.float()
         stem = (x - mean) / std
-        rgb = (x[:, :3] - self.sat_mean) / self.sat_std
+        rgb = x.index_select(1, torch.arange(3, device=x.device))
+        rgb = (rgb - self.sat_mean) / self.sat_std
         feats = self.encoder(stem, rgb, wavelengths)
         logits = self.head(self.decoder([feats[k] for k in "1234"]))
         logits = fn.interpolate(
