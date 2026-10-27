@@ -635,7 +635,12 @@ class Extractor(nn.Module):
             return query
 
         if self.with_cp and query.requires_grad:
-            query = cp.checkpoint(_inner_forward, query, feat)
+            query = cp.checkpoint(
+                _inner_forward,
+                query,
+                feat,
+                use_reentrant=False,
+            )
         else:
             query = _inner_forward(query, feat)
 
@@ -879,7 +884,12 @@ class SpatialPriorModule(nn.Module):
             return c1, c2, c3, c4
 
         if self.with_cp and x.requires_grad:
-            outs = cp.checkpoint(_inner_forward, x, wavelengths)
+            outs = cp.checkpoint(
+                _inner_forward,
+                x,
+                wavelengths,
+                use_reentrant=False,
+            )
         else:
             outs = _inner_forward(x, wavelengths)
         return outs
