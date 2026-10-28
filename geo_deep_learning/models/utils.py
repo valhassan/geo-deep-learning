@@ -7,15 +7,12 @@ import warnings
 import torch
 import torch.nn.functional as fn
 from torch import nn
-from torch.amp import custom_bwd, custom_fwd
-from torch.autograd import Function
-from torch.autograd.function import once_differentiable
 from torch.nn.init import constant_, xavier_uniform_
 
 try:
-    import MultiScaleDeformableAttention as msda  # noqa: N813
+    from msda_triton.frontend import triton_multiscale_deformable_attention
 except ImportError:
-    msda = None
+    triton_multiscale_deformable_attention = None
 
 logger = logging.getLogger(__name__)
 _logged_msda: set[str] = set()
@@ -223,76 +220,6 @@ def is_power_of_2(n: int) -> bool:
     return (n & (n - 1) == 0) and n != 0
 
 
-class MSDeformAttnFunction(Function):
-    """Multi-Scale Deformable Attention Function."""
-
-    @staticmethod
-    @custom_fwd(device_type="cuda", cast_inputs=torch.float32)
-    def forward(  # noqa: PLR0913, PLR0917
-        ctx: object,
-        value: torch.Tensor,
-        value_spatial_shapes: torch.Tensor,
-        value_level_start_index: torch.Tensor,
-        sampling_locations: torch.Tensor,
-        attention_weights: torch.Tensor,
-        im2col_step: int,
-    ) -> torch.Tensor:
-        """Forward function."""
-        ctx.im2col_step = im2col_step
-
-        # Use fast CUDA kernel (memory-efficient, processes in chunks)
-        output = msda.ms_deform_attn_forward(
-            value,
-            value_spatial_shapes,
-            value_level_start_index,
-            sampling_locations,
-            attention_weights,
-            ctx.im2col_step,
-        )
-        # Fallback to PyTorch implementation (slower, more memory)
-        # output = ms_deform_attn_core_pytorch(
-        #     value,
-        #     value_spatial_shapes,
-        #     sampling_locations,
-        #     attention_weights,
-        # )
-        ctx.save_for_backward(
-            value,
-            value_spatial_shapes,
-            value_level_start_index,
-            sampling_locations,
-            attention_weights,
-        )
-        return output
-
-    @staticmethod
-    @custom_bwd(device_type="cuda")
-    @once_differentiable
-    def backward(
-        ctx: object,
-        grad_output: torch.Tensor,
-    ) -> tuple[torch.Tensor, ...]:
-        """Backward function."""
-        (
-            value,
-            value_spatial_shapes,
-            value_level_start_index,
-            sampling_locations,
-            attention_weights,
-        ) = ctx.saved_tensors
-        grad_value, grad_sampling_loc, grad_attn_weight = msda.ms_deform_attn_backward(
-            value,
-            value_spatial_shapes,
-            value_level_start_index,
-            sampling_locations,
-            attention_weights,
-            grad_output,
-            ctx.im2col_step,
-        )
-
-        return grad_value, None, None, grad_sampling_loc, grad_attn_weight, None
-
-
 def ms_deform_attn_core_pytorch(
     value: torch.Tensor,
     value_spatial_shapes: torch.Tensor,
@@ -373,7 +300,6 @@ class MSDeformAttn(nn.Module):
                 "which is more efficient in our CUDA implementation.",
                 stacklevel=2,
             )
-        self.im2col_step = 128
         self.d_model = d_model
         self.n_levels = n_levels
         self.n_heads = n_heads
@@ -416,7 +342,7 @@ class MSDeformAttn(nn.Module):
         reference_points: torch.Tensor,
         input_flatten: torch.Tensor,
         input_spatial_shapes: torch.Tensor,
-        input_level_start_index: torch.Tensor,
+        input_level_start_index: torch.Tensor,  # noqa: ARG002
         input_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward function."""
@@ -481,32 +407,39 @@ class MSDeformAttn(nn.Module):
                 f"but get {reference_points.shape[-1]} instead."
             )
             raise ValueError(err_msg)
-        use_cuda_op = (
-            msda is not None and value.is_cuda and not torch.compiler.is_exporting()
+        use_triton = (
+            triton_multiscale_deformable_attention is not None
+            and value.is_cuda
+            and not torch.compiler.is_exporting()
         )
-        if value.is_cuda and msda is None and "slow" not in _logged_msda:
-            _logged_msda.add("slow")
-            logger.warning(
-                "MSDeformAttn CUDA op is not installed; using the PyTorch path on GPU",
+        if use_triton:
+            if "triton" not in _logged_msda:
+                _logged_msda.add("triton")
+                logger.info("MSDeformAttn path: triton")
+            # Triton rejects bf16. The old CUDA op cast these to fp32 too.
+            output = triton_multiscale_deformable_attention(
+                value.float(),
+                input_spatial_shapes,
+                sampling_locations.float(),
+                attention_weights.float(),
+                padding_mode="zeros",
+                align_corners=False,
             )
-        elif not _logged_msda:
-            path = "cuda" if use_cuda_op else "pytorch"
-            _logged_msda.add(path)
-            logger.info("MSDeformAttn path: %s", path)
-        if not use_cuda_op:
+            output = output.flatten(-2)
+        else:
+            if value.is_cuda and "pytorch" not in _logged_msda:
+                _logged_msda.add("pytorch")
+                logger.warning(
+                    "MSDeformAttn Triton op is not installed; "
+                    "using the PyTorch path on GPU",
+                )
+            elif "pytorch" not in _logged_msda:
+                _logged_msda.add("pytorch")
+                logger.info("MSDeformAttn path: pytorch")
             output = ms_deform_attn_core_pytorch(
                 value,
                 input_spatial_shapes,
                 sampling_locations,
                 attention_weights,
-            )
-        else:
-            output = MSDeformAttnFunction.apply(
-                value,
-                input_spatial_shapes,
-                input_level_start_index,
-                sampling_locations,
-                attention_weights,
-                self.im2col_step,
             )
         return self.output_proj(output)
