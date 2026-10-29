@@ -141,4 +141,7 @@ class DoRAQKVWrapper(nn.Module):
         bias = self._masked_bias()
         if self.training:
             return fn.linear(self.dropout(x), self._compose_qkv_weight(), bias)
+        # The eval cache is built under no_grad. Export has to trace the math.
+        if torch.compiler.is_exporting():
+            return fn.linear(x, self._compose_qkv_weight(), bias)
         return fn.linear(x, self._merged_qkv_weight(), bias)
