@@ -38,7 +38,7 @@ class DINOv3SegmentationModel(nn.Module):
             channels=256,
             align_corners=False,
             scale_modules=False,
-            norm="gn",
+            norm="bn",
         )
         self.head = SegmentationHead(in_channels=256, num_classes=num_classes)
         self.register_buffer("sat_mean", torch.tensor(_SAT_MEAN).view(1, 3, 1, 1))
