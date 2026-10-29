@@ -736,14 +736,6 @@ class InteractionBlockWithCls(nn.Module):
         return x, c, cls
 
 
-def _group_norm(channels: int) -> nn.GroupNorm:
-    """32 groups when the width allows. No running stats, so sensors do not blend."""
-    groups = min(32, channels)
-    while channels % groups != 0:
-        groups //= 2
-    return nn.GroupNorm(groups, channels)
-
-
 class SpatialPriorModule(nn.Module):
     """SpatialPriorModule."""
 
@@ -767,7 +759,7 @@ class SpatialPriorModule(nn.Module):
                 padding=1,
                 bias=False,
             ),
-            _group_norm(inplanes),
+            nn.BatchNorm2d(inplanes),
             nn.ReLU(inplace=True),
             nn.Conv2d(
                 inplanes,
@@ -777,7 +769,7 @@ class SpatialPriorModule(nn.Module):
                 padding=1,
                 bias=False,
             ),
-            _group_norm(inplanes),
+            nn.BatchNorm2d(inplanes),
             nn.ReLU(inplace=True),
         )
         self.conv2 = nn.Sequential(
@@ -790,7 +782,7 @@ class SpatialPriorModule(nn.Module):
                     padding=1,
                     bias=False,
                 ),
-                _group_norm(2 * inplanes),
+                nn.BatchNorm2d(2 * inplanes),
                 nn.ReLU(inplace=True),
             ],
         )
@@ -804,7 +796,7 @@ class SpatialPriorModule(nn.Module):
                     padding=1,
                     bias=False,
                 ),
-                _group_norm(4 * inplanes),
+                nn.BatchNorm2d(4 * inplanes),
                 nn.ReLU(inplace=True),
             ],
         )
@@ -818,7 +810,7 @@ class SpatialPriorModule(nn.Module):
                     padding=1,
                     bias=False,
                 ),
-                _group_norm(4 * inplanes),
+                nn.BatchNorm2d(4 * inplanes),
                 nn.ReLU(inplace=True),
             ],
         )
@@ -957,10 +949,10 @@ class DINOv3Adapter(nn.Module):
             ],
         )
         self.up = nn.ConvTranspose2d(embed_dim, embed_dim, 2, 2)
-        self.norm1 = _group_norm(embed_dim)
-        self.norm2 = _group_norm(embed_dim)
-        self.norm3 = _group_norm(embed_dim)
-        self.norm4 = _group_norm(embed_dim)
+        self.norm1 = nn.BatchNorm2d(embed_dim)
+        self.norm2 = nn.BatchNorm2d(embed_dim)
+        self.norm3 = nn.BatchNorm2d(embed_dim)
+        self.norm4 = nn.BatchNorm2d(embed_dim)
 
         self.up.apply(self._init_weights)
         # The wavelength stem keeps the DOFA init. Re-init would wipe the 0.01 bias.
