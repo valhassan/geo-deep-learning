@@ -344,8 +344,10 @@ class DinoVisionTransformer(nn.Module):
         )
         # DoRA leaves a graph through every block. Checkpoint so attention
         # maps are recomputed on backward instead of stored.
-        checkpoint_blocks = torch.is_grad_enabled() and any(
-            p.requires_grad for p in self.parameters()
+        checkpoint_blocks = (
+            not torch.compiler.is_exporting()
+            and torch.is_grad_enabled()
+            and any(p.requires_grad for p in self.parameters())
         )
         rope_sincos = (
             self.rope_embed(height=h, width=w) if self.rope_embed is not None else None
@@ -634,7 +636,7 @@ class Extractor(nn.Module):
                 query = query + self.drop_path(self.ffn(self.ffn_norm(query), h, w))
             return query
 
-        if self.with_cp and query.requires_grad:
+        if self.with_cp and query.requires_grad and not torch.compiler.is_exporting():
             query = cp.checkpoint(
                 _inner_forward,
                 query,
@@ -875,7 +877,7 @@ class SpatialPriorModule(nn.Module):
 
             return c1, c2, c3, c4
 
-        if self.with_cp and x.requires_grad:
+        if self.with_cp and x.requires_grad and not torch.compiler.is_exporting():
             outs = cp.checkpoint(
                 _inner_forward,
                 x,
@@ -1028,12 +1030,19 @@ class DINOv3Adapter(nn.Module):
         h_toks, w_toks = x.shape[2] // self.patch_size, x.shape[3] // self.patch_size
         bs, _, _, _ = x.shape
 
-        # no_grad only while the backbone is fully frozen. DoRA leaves
-        # lora_* and mag_* trainable, and those need a graph.
-        device_type = rgb.device.type
-        backbone_frozen = not any(p.requires_grad for p in self.backbone.parameters())
-        grad_ctx = torch.no_grad() if backbone_frozen else nullcontext()
-        with torch.autocast(device_type, dtype=torch.bfloat16), grad_ctx:
+        # Export traces the plain forward. Training uses bf16, and no_grad
+        # only while the backbone is fully frozen. DoRA needs the graph.
+        if torch.compiler.is_exporting():
+            autocast_ctx = nullcontext()
+            grad_ctx = nullcontext()
+        else:
+            device_type = rgb.device.type
+            backbone_frozen = not any(
+                p.requires_grad for p in self.backbone.parameters()
+            )
+            grad_ctx = torch.no_grad() if backbone_frozen else nullcontext()
+            autocast_ctx = torch.autocast(device_type, dtype=torch.bfloat16)
+        with autocast_ctx, grad_ctx:
             all_layers = self.backbone.get_intermediate_layers(
                 rgb,
                 n=self.interaction_indexes,
