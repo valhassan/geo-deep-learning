@@ -26,29 +26,6 @@ from geo_deep_learning.tools.visualization import visualize_prediction
 logger = logging.getLogger(__name__)
 
 
-def _adamw_groups(model: nn.Module) -> list[dict[str, Any]]:
-    """Decay weights. Skip frozen params, GroupNorm affine, and biases."""
-    gn = {
-        id(param)
-        for module in model.modules()
-        if isinstance(module, nn.GroupNorm)
-        for param in module.parameters(recurse=False)
-    }
-    decay: list[Tensor] = []
-    no_decay: list[Tensor] = []
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        if id(param) in gn or name.endswith(".bias"):
-            no_decay.append(param)
-        else:
-            decay.append(param)
-    groups: list[dict[str, Any]] = [{"params": decay}]
-    if no_decay:
-        groups.append({"params": no_decay, "weight_decay": 0.0})
-    return groups
-
-
 class SegmentationDINOv3(LightningModule):
     """DINOv3 segmentation model."""
 
@@ -141,8 +118,9 @@ class SegmentationDINOv3(LightningModule):
         self.radiometric_aug = self.radiometric_aug.to(self.device)
 
     def configure_optimizers(self) -> tuple[list[torch.optim.Optimizer], list[dict]]:
-        """AdamW with decay on weights and none on GroupNorm or bias."""
-        optimizer = self.optimizer(_adamw_groups(self.model))
+        """One AdamW group. Every trainable parameter uses the configured decay."""
+        trainable = [param for param in self.model.parameters() if param.requires_grad]
+        optimizer = self.optimizer(trainable)
         scheduler = self.scheduler(optimizer)
         return [optimizer], [{"scheduler": scheduler, **self.scheduler_config}]
 
