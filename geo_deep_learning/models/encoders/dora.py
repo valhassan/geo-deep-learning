@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, override
 
 import torch
 import torch.nn.functional as fn
 from torch import nn
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 
 class DoRAQKVWrapper(nn.Module):
@@ -48,11 +44,8 @@ class DoRAQKVWrapper(nn.Module):
         self.lora_a_v = nn.Parameter(torch.empty((r, self.dim)))
         self.lora_b_v = nn.Parameter(torch.empty((self.dim, r)))
         self.mag_v = nn.Parameter(torch.empty(self.dim))
-        # Full QKV matrix for eval. Rebuilt when weights or device change.
-        self._merged_weight: torch.Tensor | None = None
 
         self.reset_parameters()
-        self.register_load_state_dict_post_hook(self._clear_merged_on_load)
 
     def reset_parameters(self) -> None:
         """Reset the parameters of the DoRAQKVWrapper."""
@@ -68,29 +61,6 @@ class DoRAQKVWrapper(nn.Module):
             self.mag_v.data.copy_(
                 torch.linalg.norm(self.qkv.weight[-self.dim :, :], dim=1),
             )
-        self._merged_weight = None
-
-    @override
-    def train(self, mode: bool = True) -> DoRAQKVWrapper:
-        """Drop the inference weight when training resumes."""
-        if mode:
-            self._merged_weight = None
-        return super().train(mode)
-
-    @override
-    def _apply(
-        self,
-        func: Callable[[torch.Tensor], torch.Tensor],
-        recurse: bool = True,
-    ) -> DoRAQKVWrapper:
-        """Device or dtype changes invalidate the cached matrix."""
-        self._merged_weight = None
-        return super()._apply(func, recurse=recurse)
-
-    @staticmethod
-    def _clear_merged_on_load(module: nn.Module, incompatible_keys: object) -> None:
-        del incompatible_keys
-        module._merged_weight = None  # noqa: SLF001
 
     def _get_dora_weight(
         self,
@@ -122,14 +92,6 @@ class DoRAQKVWrapper(nn.Module):
         )
         return torch.cat((w_q, w_k, w_v), dim=0)
 
-    def _merged_qkv_weight(self) -> torch.Tensor:
-        """Materialize the QKV matrix once per eval session."""
-        if self._merged_weight is None:
-            device_type = self.qkv.weight.device.type
-            with torch.no_grad(), torch.autocast(device_type, enabled=False):
-                self._merged_weight = self._compose_qkv_weight().detach()
-        return self._merged_weight
-
     def _masked_bias(self) -> torch.Tensor | None:
         """Apply the DINOv3 key-bias mask when the inner linear has one."""
         if hasattr(self.qkv, "bias_mask") and self.qkv.bias is not None:
@@ -137,11 +99,9 @@ class DoRAQKVWrapper(nn.Module):
         return self.qkv.bias
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass."""
-        bias = self._masked_bias()
-        if self.training:
-            return fn.linear(self.dropout(x), self._compose_qkv_weight(), bias)
-        # The eval cache is built under no_grad. Export has to trace the math.
-        if torch.compiler.is_exporting():
-            return fn.linear(x, self._compose_qkv_weight(), bias)
-        return fn.linear(x, self._merged_qkv_weight(), bias)
+        """Forward pass. The QKV weight is rebuilt from current params every call."""
+        return fn.linear(
+            self.dropout(x),
+            self._compose_qkv_weight(),
+            self._masked_bias(),
+        )
